@@ -1,4 +1,6 @@
-pytrends==4.9.2
+# requirements.txt - Update with compatible versions
+numpy==1.23.5
 pandas==1.5.3
+pytrends==4.9.2
 youtube-transcript-api==0.6.1
 requests==2.31.0
