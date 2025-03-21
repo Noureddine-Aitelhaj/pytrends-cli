@@ -149,6 +149,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(500, f'Server error: {str(e)}')
 
 PORT = int(os.environ.get('PORT', 8080))
-httpd = socketserver.TCPServer(("", PORT), Handler)
+httpd = socketserver.TCPServer(("0.0.0.0", PORT), Handler)
 print(f"Serving at port {PORT}")
 httpd.serve_forever()
