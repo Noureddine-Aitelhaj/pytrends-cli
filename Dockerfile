@@ -2,9 +2,12 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy installation script
+COPY install_dependencies.sh .
+RUN chmod +x install_dependencies.sh
+
+# Install dependencies using the script
+RUN ./install_dependencies.sh
 
 # Copy application code
 COPY . .
