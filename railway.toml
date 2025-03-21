@@ -1,8 +1,9 @@
+# railway.toml - Replace the entire content with this code
 [build]
 builder = "dockerfile"
 
 [deploy]
-startCommand = "bash start.sh"
-healthcheckPath = "/"
-healthcheckTimeout = 300
+healthcheckPath = "/health"
+healthcheckTimeout = 10
 restartPolicyType = "always"
+startCommand = "python server.py"
