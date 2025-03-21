@@ -1,25 +1,39 @@
+# Dockerfile - Replace the entire content with this code
 FROM python:3.9-slim
 
 WORKDIR /app
 
-# Copy requirements first for better caching
+# Install necessary tools for debugging
+RUN apt-get update && apt-get install -y \
+    dos2unix \
+    procps \
+    curl \
+    net-tools \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
+# Copy application code
 COPY . .
 
+# Fix line endings in scripts
+RUN dos2unix start.sh
+
 # Make scripts executable
-RUN chmod +x cli.py start.sh
+RUN chmod +x start.sh
 
 # Create data directory
 RUN mkdir -p /app/data
 
-# Expose port for web server
+# Set environment variables
+ENV PORT=8080
+ENV PYTHONUNBUFFERED=1
+
+# Expose port
 EXPOSE 8080
 
-# Set the entry point
-ENTRYPOINT ["/bin/bash", "/app/start.sh"]
-
-# Use a clear CMD that directly runs your server
-CMD ["python", "server.py"]
+# Set the entrypoint
+CMD ["bash", "-c", "echo 'Container starting' && python server.py"]
