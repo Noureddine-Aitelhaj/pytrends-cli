@@ -20,3 +20,6 @@ EXPOSE 8080
 
 # Set the entry point
 ENTRYPOINT ["/bin/bash", "/app/start.sh"]
+
+# Use a clear CMD that directly runs your server
+CMD ["python", "server.py"]
