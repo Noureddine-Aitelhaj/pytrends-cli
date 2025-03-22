@@ -1,932 +1,122 @@
-# server.py - Focused on PyTrends functionality only
-import http.server
-import socketserver
-import json
-import os
-import traceback
-import urllib.parse
-from datetime import datetime
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        # Parse the URL
-        parsed_url = urllib.parse.urlparse(self.path)
-        path = parsed_url.path
-        query_string = parsed_url.query
-        query = urllib.parse.parse_qs(query_string)
+def handle_realtime_trending_searches(self, query):
+    """Handle realtime trending searches endpoint"""
+    try:
+        # Get parameters
+        pn = query.get('pn', ['US'])[0]
+        hl = query.get('hl', ['en-US'])[0]
+        tz = int(query.get('tz', ['360'])[0])
+        cat = query.get('cat', ['all'])[0]
         
-        logger.info(f"Received request for path: {path}")
+        logger.info(f"Realtime trending searches request: pn={pn}, cat={cat}")
         
-        # Health check endpoint
-        if path == '/health' or path == '/':
-            self.send_response(200)
+        # Import here to avoid impacting health checks
+        from pytrends.request import TrendReq
+        import pandas as pd
+        
+        # Initialize PyTrends with basic parameters
+        pytrends = TrendReq(
+            hl=hl,
+            tz=tz,
+            timeout=(10,25),
+            retries=2,
+            backoff_factor=0.5
+        )
+        
+        # Removed the _get_google_cookies() call
+
+        # Known working country codes
+        supported_countries = [
+            'AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'CO', 'CZ', 'DK',
+            'EG', 'FI', 'FR', 'DE', 'GR', 'HK', 'HU', 'IN', 'ID', 'IE',
+            'IL', 'IT', 'JP', 'KE', 'MY', 'MX', 'NL', 'NZ', 'NG', 'NO',
+            'PL', 'PT', 'PH', 'RO', 'RU', 'SA', 'SG', 'ZA', 'KR', 'ES',
+            'SE', 'CH', 'TW', 'TH', 'TR', 'UA', 'GB', 'US', 'VN'
+        ]
+        
+        # Format pn correctly (uppercase 2-letter country code is most reliable)
+        if len(pn) == 2:
+            pn = pn.upper()
+        else:
+            # Map some common country names to codes
+            country_map = {
+                'united_states': 'US',
+                'united_kingdom': 'GB',
+                'japan': 'JP',
+                'canada': 'CA',
+                'germany': 'DE',
+                'india': 'IN',
+                'australia': 'AU',
+            }
+            pn = country_map.get(pn.lower(), pn.upper())
+        
+        # Validate country code
+        if pn not in supported_countries:
+            self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            response = {"status": "healthy", "time": str(datetime.now())}
-            self.wfile.write(json.dumps(response).encode())
+            error_response = {
+                "status": "error", 
+                "message": f"Country code {pn} not supported. Use a 2-letter ISO country code from the supported list.",
+                "supported_countries": supported_countries
+            }
+            self.wfile.write(json.dumps(error_response).encode())
             return
         
-        # Original trends endpoint (backward compatibility)
-        elif path == '/trends':
-            self.handle_trends(query)
-            return
-        
-        # New trend endpoints
-        elif path.startswith('/trends/'):
-            endpoint = path[8:]  # Remove '/trends/' prefix
-            if endpoint == 'interest-over-time':
-                self.handle_interest_over_time(query)
-            elif endpoint == 'multirange-interest-over-time':
-                self.handle_multirange_interest_over_time(query)
-            elif endpoint == 'historical-hourly-interest':
-                self.handle_historical_hourly_interest(query)
-            elif endpoint == 'interest-by-region':
-                self.handle_interest_by_region(query)
-            elif endpoint == 'related-topics':
-                self.handle_related_topics(query)
-            elif endpoint == 'related-queries':
-                self.handle_related_queries(query)
-            elif endpoint == 'trending-searches':
-                self.handle_trending_searches(query)
-            elif endpoint == 'realtime-trending-searches':
-                self.handle_realtime_trending_searches(query)
-            elif endpoint == 'top-charts':
-                self.handle_top_charts(query)
-            elif endpoint == 'suggestions':
-                self.handle_suggestions(query)
-            elif endpoint == 'categories':
-                self.handle_categories(query)
+        # Get data
+        try:
+            df = pytrends.realtime_trending_searches(pn=pn)
+            
+            if df.empty:
+                result = []
             else:
-                self.handle_not_implemented()
-            return
+                # The realtime trending searches dataframe has a specific structure
+                # Make it more user-friendly
+                result = df.to_dict('records')
+                
+                # Clean up the result to make it more readable
+                clean_result = []
+                for item in result:
+                    clean_item = {}
+                    for k, v in item.items():
+                        if isinstance(v, pd.Timestamp):
+                            clean_item[k] = v.isoformat()
+                        elif isinstance(v, list) and len(v) == 1:
+                            clean_item[k] = v[0]
+                        else:
+                            clean_item[k] = v
+                    clean_result.append(clean_item)
+                
+                result = clean_result
+                
+        except Exception as e:
+            logger.error(f"Error getting realtime trending searches: {str(e)}")
+            result = {"error": f"Failed to get realtime trending searches: {str(e)}"}
         
-        # Default response for unimplemented endpoints
-        else:
-            self.handle_not_implemented()
-            return
-    
-    def handle_not_implemented(self):
-        """Handle not implemented endpoints"""
-        self.send_response(200)  # Return 200 for health checks
+        # Send response
+        self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
-        self.wfile.write(json.dumps({
-            "message": "Endpoint not implemented yet",
-            "available_endpoints": [
-                "/health", 
-                "/trends?keywords=keyword1,keyword2", 
-                "/trends/interest-over-time?keywords=keyword1,keyword2",
-                "/trends/multirange-interest-over-time?keywords=keyword1,keyword2&timeframes=2022-01-01 2022-01-31|2022-03-01 2022-03-31",
-                "/trends/historical-hourly-interest?keywords=keyword1,keyword2&year_start=2022&month_start=1&day_start=1&year_end=2022&month_end=1&day_end=7",
-                "/trends/interest-by-region?keywords=keyword1,keyword2&resolution=COUNTRY",
-                "/trends/related-topics?keywords=keyword1,keyword2",
-                "/trends/related-queries?keywords=keyword1,keyword2",
-                "/trends/trending-searches?pn=united_states",
-                "/trends/realtime-trending-searches?pn=US",
-                "/trends/top-charts?date=2022&geo=GLOBAL",
-                "/trends/suggestions?keyword=bitcoin",
-                "/trends/categories"
-            ]
-        }).encode())
-    
-    def handle_trends(self, query):
-        """Handle legacy trends endpoint - for backward compatibility"""
-        try:
-            # Get parameters
-            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-            timeframe = query.get('timeframe', ['today 3-m'])[0]
-            query_type = query.get('query_type', ['interest_over_time'])[0]
-            geo = query.get('geo', [''])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
-            
-            logger.info(f"Trends request: keywords={keywords}, timeframe={timeframe}, type={query_type}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Build payload
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            
-            # Get data based on query type
-            if query_type == 'interest_over_time':
-                data = pytrends.interest_over_time()
-                result = data.reset_index().to_dict('records') if not data.empty else []
-            elif query_type == 'related_queries':
-                data = pytrends.related_queries()
-                result = {}
-                for kw in keywords:
-                    if kw in data and data[kw]:
-                        result[kw] = {
-                            "top": data[kw]["top"].to_dict('records') if data[kw]["top"] is not None else [],
-                            "rising": data[kw]["rising"].to_dict('records') if data[kw]["rising"] is not None else []
-                        }
-            elif query_type == 'interest_by_region':
-                resolution = query.get('resolution', ['COUNTRY'])[0]
-                data = pytrends.interest_by_region(resolution=resolution)
-                result = data.reset_index().to_dict('records') if not data.empty else []
-            else:
-                result = {"message": "Unsupported query type"}
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "keywords": keywords,
-                "timeframe": timeframe,
-                "query_type": query_type,
-                "geo": geo,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing trends request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e),
-                "sample": True,
-                "data": [{"date": "2025-03-21", "value": 100}]
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_interest_over_time(self, query):
-        """Handle interest over time endpoint"""
-        try:
-            # Get parameters
-            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-            timeframe = query.get('timeframe', ['today 3-m'])[0]
-            geo = query.get('geo', [''])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
-            
-            logger.info(f"Interest over time request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Build payload
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            
-            # Get data
-            data = pytrends.interest_over_time()
-            result = data.reset_index().to_dict('records') if not data.empty else []
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "keywords": keywords,
-                "timeframe": timeframe,
-                "geo": geo,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing interest over time request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_multirange_interest_over_time(self, query):
-        """Handle multirange interest over time endpoint"""
-        try:
-            # Get parameters
-            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-            timeframes = query.get('timeframes', ['2022-01-01 2022-01-31'])[0].split('|')
-            geo = query.get('geo', [''])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
-            
-            logger.info(f"Multirange interest over time request: keywords={keywords}, timeframes={timeframes}, geo={geo}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Execute multirange request
-            data = pytrends.multirange_interest_over_time(keywords, cat=cat, timeframe=timeframes, geo=geo)
-            result = data.reset_index().to_dict('records') if not data.empty else []
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "keywords": keywords,
-                "timeframes": timeframes,
-                "geo": geo,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing multirange interest over time request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_historical_hourly_interest(self, query):
-        """Handle historical hourly interest endpoint"""
-        try:
-            # Get parameters
-            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-            
-            # Parse dates
-            try:
-                year_start = int(query.get('year_start', ['2022'])[0])
-                month_start = int(query.get('month_start', ['1'])[0])
-                day_start = int(query.get('day_start', ['1'])[0])
-                hour_start = int(query.get('hour_start', ['0'])[0])
-                year_end = int(query.get('year_end', ['2022'])[0])
-                month_end = int(query.get('month_end', ['1'])[0])
-                day_end = int(query.get('day_end', ['7'])[0])
-                hour_end = int(query.get('hour_end', ['0'])[0])
-                sleep = int(query.get('sleep', ['0'])[0])
-            except ValueError:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {"error": "Date parameters must be integers"}
-                self.wfile.write(json.dumps(error_response).encode())
-                return
-                
-            geo = query.get('geo', [''])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
-            
-            logger.info(f"Historical hourly interest request: keywords={keywords}, start={year_start}-{month_start}-{day_start}, end={year_end}-{month_end}-{day_end}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Get data
-            data = pytrends.get_historical_interest(
-                keywords, 
-                year_start=year_start, month_start=month_start, day_start=day_start, hour_start=hour_start,
-                year_end=year_end, month_end=month_end, day_end=day_end, hour_end=hour_end,
-                cat=cat, geo=geo, gprop='', sleep=sleep
-            )
-            
-            result = data.reset_index().to_dict('records') if not data.empty else []
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "keywords": keywords,
-                "start_date": f"{year_start}-{month_start}-{day_start} {hour_start}:00",
-                "end_date": f"{year_end}-{month_end}-{day_end} {hour_end}:00",
-                "geo": geo,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing historical hourly interest request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_interest_by_region(self, query):
-        """Handle interest by region endpoint"""
-        try:
-            # Get parameters
-            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-            timeframe = query.get('timeframe', ['today 3-m'])[0]
-            geo = query.get('geo', [''])[0]
-            resolution = query.get('resolution', ['COUNTRY'])[0]
-            inc_low_vol = query.get('inc_low_vol', ['true'])[0].lower() == 'true'
-            inc_geo_code = query.get('inc_geo_code', ['false'])[0].lower() == 'true'
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
-            
-            logger.info(f"Interest by region request: keywords={keywords}, timeframe={timeframe}, geo={geo}, resolution={resolution}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Build payload
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            
-            # Get data
-            data = pytrends.interest_by_region(resolution=resolution, inc_low_vol=inc_low_vol, inc_geo_code=inc_geo_code)
-            result = data.reset_index().to_dict('records') if not data.empty else []
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "keywords": keywords,
-                "timeframe": timeframe,
-                "geo": geo,
-                "resolution": resolution,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing interest by region request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_related_topics(self, query):
-        """Handle related topics endpoint"""
-        try:
-            # Get parameters
-            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-            timeframe = query.get('timeframe', ['today 3-m'])[0]
-            geo = query.get('geo', [''])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
-            
-            logger.info(f"Related topics request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Build payload
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            
-            # Get data
-            data = pytrends.related_topics()
-            result = {}
-            
-            for kw in keywords:
-                if kw in data and data[kw]:
-                    result[kw] = {
-                        "top": data[kw]["top"].to_dict('records') if data[kw]["top"] is not None else [],
-                        "rising": data[kw]["rising"].to_dict('records') if data[kw]["rising"] is not None else []
-                    }
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "keywords": keywords,
-                "timeframe": timeframe,
-                "geo": geo,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing related topics request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_related_queries(self, query):
-        """Handle related queries endpoint"""
-        try:
-            # Get parameters
-            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-            timeframe = query.get('timeframe', ['today 3-m'])[0]
-            geo = query.get('geo', [''])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
-            
-            logger.info(f"Related queries request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Build payload
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            
-            # Get data
-            data = pytrends.related_queries()
-            result = {}
-            
-            for kw in keywords:
-                if kw in data and data[kw]:
-                    result[kw] = {
-                        "top": data[kw]["top"].to_dict('records') if data[kw]["top"] is not None else [],
-                        "rising": data[kw]["rising"].to_dict('records') if data[kw]["rising"] is not None else []
-                    }
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "keywords": keywords,
-                "timeframe": timeframe,
-                "geo": geo,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing related queries request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_trending_searches(self, query):
-        """Handle trending searches endpoint"""
-        try:
-            # Get parameters
-            pn = query.get('pn', ['united_states'])[0].lower()  # Ensure lowercase
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            
-            logger.info(f"Trending searches request: pn={pn}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends with backoff_factor
-            # This helps with rate limiting
-            pytrends = TrendReq(hl=hl, tz=tz, timeout=(10,25), retries=2, backoff_factor=0.5)
-            
-            # Get data with correct country codes
-            # These are the known working formats for different countries
-            known_countries = {
-                'united_states': 'united_states',
-                'us': 'united_states',
-                'uk': 'united_kingdom',
-                'united_kingdom': 'united_kingdom', 
-                'japan': 'japan',
-                'canada': 'canada',
-                'germany': 'germany',
-                'india': 'india',
-                'australia': 'australia',
-                'brazil': 'brazil',
-                'france': 'france',
-                'mexico': 'mexico',
-                'italy': 'italy'
-            }
-            
-            # Use known country format if available
-            country = known_countries.get(pn.lower(), pn.lower())
-            
-            # Get data
-            try:
-                df = pytrends.trending_searches(pn=country)
-                
-                # Handle different formats of results
-                if isinstance(df, pd.Series):
-                    result = df.tolist()
-                    result = [{"query": item} for item in result]
-                elif isinstance(df, pd.DataFrame):
-                    if len(df.columns) == 1 and not df.empty:
-                        result = df[df.columns[0]].tolist()
-                        result = [{"query": item} for item in result]
-                    else:
-                        result = df.to_dict('records')
-                else:
-                    result = [{"query": str(df)}]
-                    
-            except Exception as e:
-                # Try alternate format with uppercase for certain countries
-                if country.lower() in ['us', 'uk', 'jp', 'ca', 'de', 'in', 'au']:
-                    try:
-                        df = pytrends.trending_searches(pn=country.upper())
-                        if isinstance(df, pd.Series):
-                            result = df.tolist()
-                            result = [{"query": item} for item in result]
-                        else:
-                            result = df.to_dict('records')
-                    except Exception as e2:
-                        logger.error(f"Both formats failed: {str(e)} and {str(e2)}")
-                        raise ValueError(f"Failed to get trending searches for {pn}: {str(e)}")
-                else:
-                    raise ValueError(f"Failed to get trending searches for {pn}: {str(e)}")
-                    
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "pn": pn,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing trending searches request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_realtime_trending_searches(self, query):
-        """Handle realtime trending searches endpoint"""
-        try:
-            # Get parameters
-            pn = query.get('pn', ['US'])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            cat = query.get('cat', ['all'])[0]
-            
-            logger.info(f"Realtime trending searches request: pn={pn}, cat={cat}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends with basic parameters (removed headers)
-            pytrends = TrendReq(
-                hl=hl,
-                tz=tz,
-                timeout=(10,25),
-                retries=2,
-                backoff_factor=0.5
-            )
-            
-            # Manually fetch Google cookies
-            pytrends._get_google_cookies()
-
-            # Known working country codes
-            supported_countries = [
-                'AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'CO', 'CZ', 'DK',
-                'EG', 'FI', 'FR', 'DE', 'GR', 'HK', 'HU', 'IN', 'ID', 'IE',
-                'IL', 'IT', 'JP', 'KE', 'MY', 'MX', 'NL', 'NZ', 'NG', 'NO',
-                'PL', 'PT', 'PH', 'RO', 'RU', 'SA', 'SG', 'ZA', 'KR', 'ES',
-                'SE', 'CH', 'TW', 'TH', 'TR', 'UA', 'GB', 'US', 'VN'
-            ]
-            
-            # Format pn correctly (uppercase 2-letter country code is most reliable)
-            if len(pn) == 2:
-                pn = pn.upper()
-            else:
-                # Map some common country names to codes
-                country_map = {
-                    'united_states': 'US',
-                    'united_kingdom': 'GB',
-                    'japan': 'JP',
-                    'canada': 'CA',
-                    'germany': 'DE',
-                    'india': 'IN',
-                    'australia': 'AU',
-                }
-                pn = country_map.get(pn.lower(), pn.upper())
-            
-            # Validate country code
-            if pn not in supported_countries:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {
-                    "status": "error", 
-                    "message": f"Country code {pn} not supported. Use a 2-letter ISO country code from the supported list.",
-                    "supported_countries": supported_countries
-                }
-                self.wfile.write(json.dumps(error_response).encode())
-                return
-            
-            # Get data
-            try:
-                df = pytrends.realtime_trending_searches(pn=pn)
-                
-                if df.empty:
-                    result = []
-                else:
-                    # The realtime trending searches dataframe has a specific structure
-                    # Make it more user-friendly
-                    result = df.to_dict('records')
-                    
-                    # Clean up the result to make it more readable
-                    clean_result = []
-                    for item in result:
-                        clean_item = {}
-                        for k, v in item.items():
-                            if isinstance(v, pd.Timestamp):
-                                clean_item[k] = v.isoformat()
-                            elif isinstance(v, list) and len(v) == 1:
-                                clean_item[k] = v[0]
-                            else:
-                                clean_item[k] = v
-                        clean_result.append(clean_item)
-                    
-                    result = clean_result
-                    
-            except Exception as e:
-                logger.error(f"Error getting realtime trending searches: {str(e)}")
-                result = {"error": f"Failed to get realtime trending searches: {str(e)}"}
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "pn": pn,
-                "cat": cat,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing realtime trending searches request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_top_charts(self, query):
-        """Handle top charts endpoint"""
-        try:
-            # Get parameters
-            date = int(query.get('date', ['2021'])[0])
-            geo = query.get('geo', ['GLOBAL'])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            
-            logger.info(f"Top charts request: date={date}, geo={geo}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            import pandas as pd
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Get data
-            data = pytrends.top_charts(date, geo=geo)
-            result = data.to_dict('records') if not data.empty else []
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "date": date,
-                "geo": geo,
-                "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing top charts request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_suggestions(self, query):
-        """Handle keyword suggestions endpoint"""
-        try:
-            # Get parameters
-            keyword = query.get('keyword', ['bitcoin'])[0]
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            
-            logger.info(f"Suggestions request: keyword={keyword}")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Get data
-            suggestions = pytrends.suggestions(keyword=keyword)
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "keyword": keyword,
-                "suggestions": suggestions
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing suggestions request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-    
-    def handle_categories(self, query):
-        """Handle categories endpoint"""
-        try:
-            # Get parameters
-            hl = query.get('hl', ['en-US'])[0]
-            tz = int(query.get('tz', ['360'])[0])
-            
-            logger.info(f"Categories request")
-            
-            # Import here to avoid impacting health checks
-            from pytrends.request import TrendReq
-            
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
-            
-            # Get data
-            categories = pytrends.categories()
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
-                "categories": categories
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
-        except Exception as e:
-            logger.error(f"Error processing categories request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            
-            self.wfile.write(json.dumps(error_response).encode())
-
-# =============== SERVER STARTUP ===============
-
-PORT = int(os.environ.get('PORT', 8080))
-logger.info(f"Starting server on 0.0.0.0:{PORT}")
-
-try:
-    httpd = socketserver.TCPServer(("0.0.0.0", PORT), Handler)
-    logger.info(f"Server started on 0.0.0.0:{PORT}")
-    httpd.serve_forever()
-except Exception as e:
-    logger.error(f"Error in server: {e}")
-    logger.error(traceback.format_exc())
+        
+        response = {
+            "pn": pn,
+            "cat": cat,
+            "data": result
+        }
+        
+        self.wfile.write(json.dumps(response, default=str).encode())
+        
+    except Exception as e:
+        logger.error(f"Error processing realtime trending searches request: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Send error response
+        self.send_response(500)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        
+        error_response = {
+            "status": "error",
+            "message": str(e)
+        }
+        
+        self.wfile.write(json.dumps(error_response).encode())
