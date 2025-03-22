@@ -666,22 +666,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends with backoff_factor
+            # Initialize PyTrends with basic parameters (removed headers)
             pytrends = TrendReq(
                 hl=hl,
                 tz=tz,
                 timeout=(10,25),
                 retries=2,
-                backoff_factor=0.5,
-                headers={  # Added headers to mimic browser
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept-Language': 'en-US,en;q=0.9'
-                }
+                backoff_factor=0.5
             )
             
-            # Manually fetch Google cookies (NEWLY ADDED)
+            # Manually fetch Google cookies
             pytrends._get_google_cookies()
-            # ===== END OF CRITICAL CHANGES =====          
 
             # Known working country codes
             supported_countries = [
