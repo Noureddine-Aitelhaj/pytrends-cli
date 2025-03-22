@@ -887,7 +887,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             # Import here so if it fails, it doesn't affect health checks
             from youtube_transcript_api import YouTubeTranscriptApi
-            from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptAvailable, NoTranscriptFound, VideoUnavailable
+            from youtube_transcript_api._errors import TranscriptsDisabled, VideoUnavailable
             from youtube_transcript_api.formatters import TextFormatter, JSONFormatter
             import requests
             
