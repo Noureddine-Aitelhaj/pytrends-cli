@@ -668,16 +668,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             # Initialize PyTrends with backoff_factor 
                 pytrends = TrendReq(
-                hl=hl,
-                tz=tz,
-                timeout=(10,25),
-                retries=2,
-                backoff_factor=0.5,
-                headers={  # Added headers to mimic browser
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept-Language': 'en-US,en;q=0.9'
-                }
-            )
+    hl=hl,
+    tz=tz,
+    timeout=(10,25),
+    retries=2,
+    backoff_factor=0.5,
+    headers={  # Added headers to mimic browser
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+    }
+)
             
             # Manually fetch Google cookies (NEWLY ADDED)
             pytrends._get_google_cookies()
