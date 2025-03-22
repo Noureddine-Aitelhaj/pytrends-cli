@@ -9,7 +9,6 @@ pip install numpy
 echo "Installing other dependencies..."
 pip install pandas
 pip install pytrends
-pip install youtube-transcript-api
 pip install requests
 
 echo "Installation completed successfully"
