@@ -1,4 +1,4 @@
-# server.py - Simplified version with backward compatibility
+# server.py - Focused on PyTrends functionality only
 import http.server
 import socketserver
 import json
@@ -31,30 +31,38 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode())
             return
         
-        # BACKWARD COMPATIBILITY: Original trends endpoint
+        # Original trends endpoint (backward compatibility)
         elif path == '/trends':
             self.handle_trends(query)
             return
         
-        # New trending endpoints
+        # New trend endpoints
         elif path.startswith('/trends/'):
             endpoint = path[8:]  # Remove '/trends/' prefix
             if endpoint == 'interest-over-time':
                 self.handle_interest_over_time(query)
-            elif endpoint == 'related-queries':
-                self.handle_related_queries(query)
+            elif endpoint == 'multirange-interest-over-time':
+                self.handle_multirange_interest_over_time(query)
+            elif endpoint == 'historical-hourly-interest':
+                self.handle_historical_hourly_interest(query)
             elif endpoint == 'interest-by-region':
                 self.handle_interest_by_region(query)
+            elif endpoint == 'related-topics':
+                self.handle_related_topics(query)
+            elif endpoint == 'related-queries':
+                self.handle_related_queries(query)
+            elif endpoint == 'trending-searches':
+                self.handle_trending_searches(query)
+            elif endpoint == 'realtime-trending-searches':
+                self.handle_realtime_trending_searches(query)
+            elif endpoint == 'top-charts':
+                self.handle_top_charts(query)
+            elif endpoint == 'suggestions':
+                self.handle_suggestions(query)
+            elif endpoint == 'categories':
+                self.handle_categories(query)
             else:
                 self.handle_not_implemented()
-            return
-        
-        # YouTube transcript endpoints
-        elif path == '/youtube/transcript':
-            self.handle_youtube_transcript(query)
-            return
-        elif path == '/youtube/transcript/list':
-            self.handle_youtube_transcript_list(query)
             return
         
         # Default response for unimplemented endpoints
@@ -64,7 +72,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     
     def handle_not_implemented(self):
         """Handle not implemented endpoints"""
-        self.send_response(200)  # Return 200 for all paths to avoid health check issues
+        self.send_response(200)  # Return 200 for health checks
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps({
@@ -73,15 +81,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "/health", 
                 "/trends?keywords=keyword1,keyword2", 
                 "/trends/interest-over-time?keywords=keyword1,keyword2",
+                "/trends/multirange-interest-over-time?keywords=keyword1,keyword2&timeframes=2022-01-01 2022-01-31|2022-03-01 2022-03-31",
+                "/trends/historical-hourly-interest?keywords=keyword1,keyword2&year_start=2022&month_start=1&day_start=1&year_end=2022&month_end=1&day_end=7",
+                "/trends/interest-by-region?keywords=keyword1,keyword2&resolution=COUNTRY",
+                "/trends/related-topics?keywords=keyword1,keyword2",
                 "/trends/related-queries?keywords=keyword1,keyword2",
-                "/trends/interest-by-region?keywords=keyword1,keyword2",
-                "/youtube/transcript?video_id=VIDEO_ID",
-                "/youtube/transcript/list?video_id=VIDEO_ID"
+                "/trends/trending-searches?pn=united_states",
+                "/trends/realtime-trending-searches?pn=US",
+                "/trends/top-charts?date=2022&geo=GLOBAL",
+                "/trends/suggestions?keyword=bitcoin",
+                "/trends/categories"
             ]
         }).encode())
     
     def handle_trends(self, query):
-        """Handle legacy trends endpoint - BACKWARD COMPATIBILITY"""
+        """Handle legacy trends endpoint - for backward compatibility"""
         try:
             # Get parameters
             keywords = query.get('keywords', ['bitcoin'])[0].split(',')
@@ -94,7 +108,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             logger.info(f"Trends request: keywords={keywords}, timeframe={timeframe}, type={query_type}")
             
-            # Import here so if it fails, it doesn't affect health checks
+            # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
             import pandas as pd
             
@@ -170,7 +184,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             logger.info(f"Interest over time request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
             
-            # Import here so if it fails, it doesn't affect health checks
+            # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
             import pandas as pd
             
@@ -214,6 +228,265 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             self.wfile.write(json.dumps(error_response).encode())
     
+    def handle_multirange_interest_over_time(self, query):
+        """Handle multirange interest over time endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframes = query.get('timeframes', ['2022-01-01 2022-01-31'])[0].split('|')
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+            
+            logger.info(f"Multirange interest over time request: keywords={keywords}, timeframes={timeframes}, geo={geo}")
+            
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+            
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=hl, tz=tz)
+            
+            # Execute multirange request
+            data = pytrends.multirange_interest_over_time(keywords, cat=cat, timeframe=timeframes, geo=geo)
+            result = data.reset_index().to_dict('records') if not data.empty else []
+            
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "keywords": keywords,
+                "timeframes": timeframes,
+                "geo": geo,
+                "data": result
+            }
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
+        except Exception as e:
+            logger.error(f"Error processing multirange interest over time request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            
+            self.wfile.write(json.dumps(error_response).encode())
+    
+    def handle_historical_hourly_interest(self, query):
+        """Handle historical hourly interest endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            
+            # Parse dates
+            try:
+                year_start = int(query.get('year_start', ['2022'])[0])
+                month_start = int(query.get('month_start', ['1'])[0])
+                day_start = int(query.get('day_start', ['1'])[0])
+                hour_start = int(query.get('hour_start', ['0'])[0])
+                year_end = int(query.get('year_end', ['2022'])[0])
+                month_end = int(query.get('month_end', ['1'])[0])
+                day_end = int(query.get('day_end', ['7'])[0])
+                hour_end = int(query.get('hour_end', ['0'])[0])
+                sleep = int(query.get('sleep', ['0'])[0])
+            except ValueError:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_response = {"error": "Date parameters must be integers"}
+                self.wfile.write(json.dumps(error_response).encode())
+                return
+                
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+            
+            logger.info(f"Historical hourly interest request: keywords={keywords}, start={year_start}-{month_start}-{day_start}, end={year_end}-{month_end}-{day_end}")
+            
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+            
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=hl, tz=tz)
+            
+            # Get data
+            data = pytrends.get_historical_interest(
+                keywords, 
+                year_start=year_start, month_start=month_start, day_start=day_start, hour_start=hour_start,
+                year_end=year_end, month_end=month_end, day_end=day_end, hour_end=hour_end,
+                cat=cat, geo=geo, gprop='', sleep=sleep
+            )
+            
+            result = data.reset_index().to_dict('records') if not data.empty else []
+            
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "keywords": keywords,
+                "start_date": f"{year_start}-{month_start}-{day_start} {hour_start}:00",
+                "end_date": f"{year_end}-{month_end}-{day_end} {hour_end}:00",
+                "geo": geo,
+                "data": result
+            }
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
+        except Exception as e:
+            logger.error(f"Error processing historical hourly interest request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            
+            self.wfile.write(json.dumps(error_response).encode())
+    
+    def handle_interest_by_region(self, query):
+        """Handle interest by region endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframe = query.get('timeframe', ['today 3-m'])[0]
+            geo = query.get('geo', [''])[0]
+            resolution = query.get('resolution', ['COUNTRY'])[0]
+            inc_low_vol = query.get('inc_low_vol', ['true'])[0].lower() == 'true'
+            inc_geo_code = query.get('inc_geo_code', ['false'])[0].lower() == 'true'
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+            
+            logger.info(f"Interest by region request: keywords={keywords}, timeframe={timeframe}, geo={geo}, resolution={resolution}")
+            
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+            
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=hl, tz=tz)
+            
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+            
+            # Get data
+            data = pytrends.interest_by_region(resolution=resolution, inc_low_vol=inc_low_vol, inc_geo_code=inc_geo_code)
+            result = data.reset_index().to_dict('records') if not data.empty else []
+            
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "keywords": keywords,
+                "timeframe": timeframe,
+                "geo": geo,
+                "resolution": resolution,
+                "data": result
+            }
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
+        except Exception as e:
+            logger.error(f"Error processing interest by region request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            
+            self.wfile.write(json.dumps(error_response).encode())
+    
+    def handle_related_topics(self, query):
+        """Handle related topics endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframe = query.get('timeframe', ['today 3-m'])[0]
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+            
+            logger.info(f"Related topics request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
+            
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+            
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=hl, tz=tz)
+            
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+            
+            # Get data
+            data = pytrends.related_topics()
+            result = {}
+            
+            for kw in keywords:
+                if kw in data and data[kw]:
+                    result[kw] = {
+                        "top": data[kw]["top"].to_dict('records') if data[kw]["top"] is not None else [],
+                        "rising": data[kw]["rising"].to_dict('records') if data[kw]["rising"] is not None else []
+                    }
+            
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "keywords": keywords,
+                "timeframe": timeframe,
+                "geo": geo,
+                "data": result
+            }
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
+        except Exception as e:
+            logger.error(f"Error processing related topics request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            
+            self.wfile.write(json.dumps(error_response).encode())
+    
     def handle_related_queries(self, query):
         """Handle related queries endpoint"""
         try:
@@ -227,7 +500,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             logger.info(f"Related queries request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
             
-            # Import here so if it fails, it doesn't affect health checks
+            # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
             import pandas as pd
             
@@ -278,33 +551,90 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             self.wfile.write(json.dumps(error_response).encode())
     
-    def handle_interest_by_region(self, query):
-        """Handle interest by region endpoint"""
+    def handle_trending_searches(self, query):
+        """Handle trending searches endpoint"""
         try:
             # Get parameters
-            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-            timeframe = query.get('timeframe', ['today 3-m'])[0]
-            geo = query.get('geo', [''])[0]
-            resolution = query.get('resolution', ['COUNTRY'])[0]
+            pn = query.get('pn', ['united_states'])[0]
             hl = query.get('hl', ['en-US'])[0]
             tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
             
-            logger.info(f"Interest by region request: keywords={keywords}, timeframe={timeframe}, geo={geo}, resolution={resolution}")
+            logger.info(f"Trending searches request: pn={pn}")
             
-            # Import here so if it fails, it doesn't affect health checks
+            # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
             import pandas as pd
             
             # Initialize PyTrends
             pytrends = TrendReq(hl=hl, tz=tz)
             
-            # Build payload
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+            # Get data
+            data = pytrends.trending_searches(pn=pn)
+            result = data.to_dict('records') if not data.empty else []
+            
+            # Convert results to a simpler format if needed
+            simple_results = []
+            for item in result:
+                if not isinstance(item, dict):
+                    simple_results.append({"query": str(item)})
+                else:
+                    simple_results.append(item)
+                    
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "pn": pn,
+                "data": simple_results if simple_results else result
+            }
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
+        except Exception as e:
+            logger.error(f"Error processing trending searches request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            
+            self.wfile.write(json.dumps(error_response).encode())
+    
+    def handle_realtime_trending_searches(self, query):
+        """Handle realtime trending searches endpoint"""
+        try:
+            # Get parameters
+            pn = query.get('pn', ['US'])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = query.get('cat', ['all'])[0]
+            
+            logger.info(f"Realtime trending searches request: pn={pn}, cat={cat}")
+            
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+            
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=hl, tz=tz)
             
             # Get data
-            data = pytrends.interest_by_region(resolution=resolution)
-            result = data.reset_index().to_dict('records') if not data.empty else []
+            data = pytrends.realtime_trending_searches(pn=pn, cat=cat)
+            
+            # Format results
+            try:
+                result = data.to_dict('records') if not data.empty else []
+            except Exception as format_error:
+                logger.error(f"Error formatting results: {str(format_error)}")
+                result = {"raw_data": str(data)}
             
             # Send response
             self.send_response(200)
@@ -312,17 +642,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             
             response = {
-                "keywords": keywords,
-                "timeframe": timeframe,
-                "geo": geo,
-                "resolution": resolution,
+                "pn": pn,
+                "cat": cat,
                 "data": result
             }
             
             self.wfile.write(json.dumps(response, default=str).encode())
             
         except Exception as e:
-            logger.error(f"Error processing interest by region request: {str(e)}")
+            logger.error(f"Error processing realtime trending searches request: {str(e)}")
             logger.error(traceback.format_exc())
             
             # Send error response
@@ -337,86 +665,43 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             self.wfile.write(json.dumps(error_response).encode())
     
-    def handle_youtube_transcript(self, query):
-        """Handle YouTube transcript endpoint"""
+    def handle_top_charts(self, query):
+        """Handle top charts endpoint"""
         try:
             # Get parameters
-            video_id = query.get('video_id', [''])[0]
-            languages = query.get('languages', [None])[0]
-            format_type = query.get('format', ['json'])[0]
-            preserve_formatting = query.get('preserve_formatting', ['false'])[0].lower() == 'true'
+            date = int(query.get('date', ['2021'])[0])
+            geo = query.get('geo', ['GLOBAL'])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
             
-            if not video_id:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {"error": "Missing video_id parameter"}
-                self.wfile.write(json.dumps(error_response).encode())
-                return
+            logger.info(f"Top charts request: date={date}, geo={geo}")
             
-            logger.info(f"YouTube transcript request: video_id={video_id}, languages={languages}")
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
             
-            # Import here so if it fails, it doesn't affect health checks
-            from youtube_transcript_api import YouTubeTranscriptApi
-            from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=hl, tz=tz)
             
-            # Extract video ID from URL if needed
-            if "youtube.com" in video_id or "youtu.be" in video_id:
-                if "youtu.be" in video_id:
-                    video_id = video_id.split("/")[-1].split("?")[0]
-                elif "v=" in video_id:
-                    video_id = video_id.split("v=")[1].split("&")[0]
+            # Get data
+            data = pytrends.top_charts(date, geo=geo)
+            result = data.to_dict('records') if not data.empty else []
             
-            # Get transcript
-            try:
-                if languages:
-                    lang_list = [lang.strip() for lang in languages.split(',')]
-                    transcript_data = YouTubeTranscriptApi.get_transcript(video_id, languages=lang_list)
-                else:
-                    transcript_data = YouTubeTranscriptApi.get_transcript(video_id, preserve_formatting=preserve_formatting)
-                
-                # Format transcript if requested
-                if format_type == 'text':
-                    full_text = " ".join([item["text"] for item in transcript_data])
-                    result = {"video_id": video_id, "full_text": full_text, "transcript": transcript_data}
-                else:
-                    result = {"video_id": video_id, "transcript": transcript_data}
-                
-                # Send response
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps(result, default=str).encode())
-                
-            except TranscriptsDisabled:
-                self.send_response(404)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {"error": "Transcripts are disabled for this video"}
-                self.wfile.write(json.dumps(error_response).encode())
-                
-            except NoTranscriptFound:
-                self.send_response(404)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {"error": "No transcript found for this video"}
-                self.wfile.write(json.dumps(error_response).encode())
-                
-            except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                
-                error_response = {
-                    "status": "error",
-                    "message": str(e),
-                    "video_id": video_id
-                }
-                
-                self.wfile.write(json.dumps(error_response).encode())
-                
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "date": date,
+                "geo": geo,
+                "data": result
+            }
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
         except Exception as e:
-            logger.error(f"Error processing YouTube transcript request: {str(e)}")
+            logger.error(f"Error processing top charts request: {str(e)}")
             logger.error(traceback.format_exc())
             
             # Send error response
@@ -431,77 +716,84 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             self.wfile.write(json.dumps(error_response).encode())
     
-    def handle_youtube_transcript_list(self, query):
-        """Handle YouTube transcript list endpoint"""
+    def handle_suggestions(self, query):
+        """Handle keyword suggestions endpoint"""
         try:
             # Get parameters
-            video_id = query.get('video_id', [''])[0]
+            keyword = query.get('keyword', ['bitcoin'])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
             
-            if not video_id:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {"error": "Missing video_id parameter"}
-                self.wfile.write(json.dumps(error_response).encode())
-                return
+            logger.info(f"Suggestions request: keyword={keyword}")
             
-            logger.info(f"YouTube transcript list request: video_id={video_id}")
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
             
-            # Import here so if it fails, it doesn't affect health checks
-            from youtube_transcript_api import YouTubeTranscriptApi
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=hl, tz=tz)
             
-            # Extract video ID from URL if needed
-            if "youtube.com" in video_id or "youtu.be" in video_id:
-                if "youtu.be" in video_id:
-                    video_id = video_id.split("/")[-1].split("?")[0]
-                elif "v=" in video_id:
-                    video_id = video_id.split("v=")[1].split("&")[0]
+            # Get data
+            suggestions = pytrends.suggestions(keyword=keyword)
             
-            try:
-                # List all available transcripts
-                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                
-                # Get transcript metadata
-                available_transcripts = []
-                for transcript in transcript_list:
-                    available_transcripts.append({
-                        "language": transcript.language,
-                        "language_code": transcript.language_code,
-                        "is_generated": transcript.is_generated,
-                        "is_translatable": transcript.is_translatable,
-                        "translation_languages": [
-                            {"language": lang["name"], "language_code": lang["language_code"]}
-                            for lang in transcript.translation_languages
-                        ] if transcript.is_translatable else []
-                    })
-                
-                # Send response
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                
-                result = {
-                    "video_id": video_id,
-                    "available_transcripts": available_transcripts
-                }
-                
-                self.wfile.write(json.dumps(result, default=str).encode())
-                
-            except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                
-                error_response = {
-                    "status": "error",
-                    "message": str(e),
-                    "video_id": video_id
-                }
-                
-                self.wfile.write(json.dumps(error_response).encode())
-                
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "keyword": keyword,
+                "suggestions": suggestions
+            }
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
         except Exception as e:
-            logger.error(f"Error in transcript list: {str(e)}")
+            logger.error(f"Error processing suggestions request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            
+            self.wfile.write(json.dumps(error_response).encode())
+    
+    def handle_categories(self, query):
+        """Handle categories endpoint"""
+        try:
+            # Get parameters
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            
+            logger.info(f"Categories request")
+            
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=hl, tz=tz)
+            
+            # Get data
+            categories = pytrends.categories()
+            
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "categories": categories
+            }
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
+        except Exception as e:
+            logger.error(f"Error processing categories request: {str(e)}")
             logger.error(traceback.format_exc())
             
             # Send error response
