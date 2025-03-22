@@ -555,7 +555,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """Handle trending searches endpoint"""
         try:
             # Get parameters
-            pn = query.get('pn', ['united_states'])[0]
+            pn = query.get('pn', ['united_states'])[0].lower()  # Ensure lowercase
             hl = query.get('hl', ['en-US'])[0]
             tz = int(query.get('tz', ['360'])[0])
             
@@ -565,20 +565,63 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with backoff_factor
+            # This helps with rate limiting
+            pytrends = TrendReq(hl=hl, tz=tz, timeout=(10,25), retries=2, backoff_factor=0.5)
+            
+            # Get data with correct country codes
+            # These are the known working formats for different countries
+            known_countries = {
+                'united_states': 'united_states',
+                'us': 'united_states',
+                'uk': 'united_kingdom',
+                'united_kingdom': 'united_kingdom', 
+                'japan': 'japan',
+                'canada': 'canada',
+                'germany': 'germany',
+                'india': 'india',
+                'australia': 'australia',
+                'brazil': 'brazil',
+                'france': 'france',
+                'mexico': 'mexico',
+                'italy': 'italy'
+            }
+            
+            # Use known country format if available
+            country = known_countries.get(pn.lower(), pn.lower())
             
             # Get data
-            data = pytrends.trending_searches(pn=pn)
-            result = data.to_dict('records') if not data.empty else []
-            
-            # Convert results to a simpler format if needed
-            simple_results = []
-            for item in result:
-                if not isinstance(item, dict):
-                    simple_results.append({"query": str(item)})
+            try:
+                df = pytrends.trending_searches(pn=country)
+                
+                # Handle different formats of results
+                if isinstance(df, pd.Series):
+                    result = df.tolist()
+                    result = [{"query": item} for item in result]
+                elif isinstance(df, pd.DataFrame):
+                    if len(df.columns) == 1 and not df.empty:
+                        result = df[df.columns[0]].tolist()
+                        result = [{"query": item} for item in result]
+                    else:
+                        result = df.to_dict('records')
                 else:
-                    simple_results.append(item)
+                    result = [{"query": str(df)}]
+                    
+            except Exception as e:
+                # Try alternate format with uppercase for certain countries
+                if country.lower() in ['us', 'uk', 'jp', 'ca', 'de', 'in', 'au']:
+                    try:
+                        df = pytrends.trending_searches(pn=country.upper())
+                        if isinstance(df, pd.Series):
+                            result = df.tolist()
+                            result = [{"query": item} for item in result]
+                        else:
+                            result = df.to_dict('records')
+                    except Exception as e2:
+                        logger.error(f"Both formats failed: {str(e)} and {str(e2)}")
+                        raise ValueError(f"Failed to get trending searches for {pn}: {str(e)}")
+                else:
+                    raise ValueError(f"Failed to get trending searches for {pn}: {str(e)}")
                     
             # Send response
             self.send_response(200)
@@ -587,7 +630,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             response = {
                 "pn": pn,
-                "data": simple_results if simple_results else result
+                "data": result
             }
             
             self.wfile.write(json.dumps(response, default=str).encode())
@@ -623,18 +666,77 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with backoff_factor 
+            # This helps with rate limiting
+            pytrends = TrendReq(hl=hl, tz=tz, timeout=(10,25), retries=2, backoff_factor=0.5)
+            
+            # Known working country codes
+            supported_countries = [
+                'AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'CO', 'CZ', 'DK',
+                'EG', 'FI', 'FR', 'DE', 'GR', 'HK', 'HU', 'IN', 'ID', 'IE',
+                'IL', 'IT', 'JP', 'KE', 'MY', 'MX', 'NL', 'NZ', 'NG', 'NO',
+                'PL', 'PT', 'PH', 'RO', 'RU', 'SA', 'SG', 'ZA', 'KR', 'ES',
+                'SE', 'CH', 'TW', 'TH', 'TR', 'UA', 'GB', 'US', 'VN'
+            ]
+            
+            # Format pn correctly (uppercase 2-letter country code is most reliable)
+            if len(pn) == 2:
+                pn = pn.upper()
+            else:
+                # Map some common country names to codes
+                country_map = {
+                    'united_states': 'US',
+                    'united_kingdom': 'GB',
+                    'japan': 'JP',
+                    'canada': 'CA',
+                    'germany': 'DE',
+                    'india': 'IN',
+                    'australia': 'AU',
+                }
+                pn = country_map.get(pn.lower(), pn.upper())
+            
+            # Validate country code
+            if pn not in supported_countries:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_response = {
+                    "status": "error", 
+                    "message": f"Country code {pn} not supported. Use a 2-letter ISO country code from the supported list.",
+                    "supported_countries": supported_countries
+                }
+                self.wfile.write(json.dumps(error_response).encode())
+                return
             
             # Get data
-            data = pytrends.realtime_trending_searches(pn=pn, cat=cat)
-            
-            # Format results
             try:
-                result = data.to_dict('records') if not data.empty else []
-            except Exception as format_error:
-                logger.error(f"Error formatting results: {str(format_error)}")
-                result = {"raw_data": str(data)}
+                df = pytrends.realtime_trending_searches(pn=pn)
+                
+                if df.empty:
+                    result = []
+                else:
+                    # The realtime trending searches dataframe has a specific structure
+                    # Make it more user-friendly
+                    result = df.to_dict('records')
+                    
+                    # Clean up the result to make it more readable
+                    clean_result = []
+                    for item in result:
+                        clean_item = {}
+                        for k, v in item.items():
+                            if isinstance(v, pd.Timestamp):
+                                clean_item[k] = v.isoformat()
+                            elif isinstance(v, list) and len(v) == 1:
+                                clean_item[k] = v[0]
+                            else:
+                                clean_item[k] = v
+                        clean_result.append(clean_item)
+                    
+                    result = clean_result
+                    
+            except Exception as e:
+                logger.error(f"Error getting realtime trending searches: {str(e)}")
+                result = {"error": f"Failed to get realtime trending searches: {str(e)}"}
             
             # Send response
             self.send_response(200)
