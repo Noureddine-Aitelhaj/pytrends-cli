@@ -1,4 +1,3 @@
-# server.py - Focused on PyTrends functionality only
 import http.server
 import socketserver
 import json
@@ -7,14 +6,38 @@ import traceback
 import urllib.parse
 from datetime import datetime
 import logging
-
+import signal
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+class RateLimiter:
+    def __init__(self, max_calls, time_frame):
+        self.max_calls = max_calls
+        self.time_frame = time_frame
+        self.calls = []
+
+    def add_call(self):
+        now = time.time()
+        self.calls = [call for call in self.calls if call > now - self.time_frame]
+        self.calls.append(now)
+
+    def is_allowed(self):
+        return len(self.calls) < self.max_calls
+
+# Create a rate limiter: 100 calls per minute
+rate_limiter = RateLimiter(max_calls=100, time_frame=60)
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
+        if not rate_limiter.is_allowed():
+            self.send_error(429, "Too Many Requests")
+            return
+
+        rate_limiter.add_call()
+
         # Parse the URL
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
@@ -28,7 +51,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            response = {"status": "healthy", "time": str(datetime.now())}
+            response = {
+                "status": "healthy",
+                "time": str(datetime.now()),
+                "version": "1.0",
+                "endpoints": ["/health", "/trends", "/trends/interest-over-time", "/trends/multirange-interest-over-time",
+                              "/trends/historical-hourly-interest", "/trends/interest-by-region", "/trends/related-topics",
+                              "/trends/related-queries", "/trends/trending-searches", "/trends/realtime-trending-searches",
+                              "/trends/top-charts", "/trends/suggestions", "/trends/categories"]
+            }
             self.wfile.write(json.dumps(response).encode())
             return
         
@@ -73,10 +104,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     
     def handle_not_implemented(self):
         """Handle not implemented endpoints"""
-        self.send_response(200)  # Return 200 for health checks
+        self.send_response(501)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps({
+            "status": "error",
             "message": "Endpoint not implemented yet",
             "available_endpoints": [
                 "/health", 
@@ -520,34 +552,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             result = {}
             
             for kw in keywords:
-    logger.info(f"Data for keyword '{kw}': {data.get(kw)}")  # Debugging log
+                logger.info(f"Data for keyword '{kw}': {data.get(kw)}")  # Debugging log
 
-    if kw in data:
-        result[kw] = {}
+                if kw in data:
+                    result[kw] = {}
 
-        # Check if "top" exists and is valid
-        if "top" in data[kw] and data[kw]["top"] is not None:
-            logger.info(f"Type of data[kw]['top']: {type(data[kw]['top'])}")  # Debugging log
-            try:
-                result[kw]["top"] = data[kw]["top"].to_dict('records')
-            except Exception as e:
-                logger.error(f"Error processing 'top' for keyword '{kw}': {str(e)}")
-                result[kw]["top"] = []
-        else:
-            result[kw]["top"] = []
+                    # Check if "top" exists and is valid
+                    if "top" in data[kw] and data[kw]["top"] is not None:
+                        logger.info(f"Type of data[kw]['top']: {type(data[kw]['top'])}")  # Debugging log
+                        try:
+                            result[kw]["top"] = data[kw]["top"].to_dict('records')
+                        except Exception as e:
+                            logger.error(f"Error processing 'top' for keyword '{kw}': {str(e)}")
+                            result[kw]["top"] = []
+                    else:
+                        result[kw]["top"] = []
 
-        # Check if "rising" exists and is valid
-        if "rising" in data[kw] and data[kw]["rising"] is not None:
-            logger.info(f"Type of data[kw]['rising']: {type(data[kw]['rising'])}")  # Debugging log
-            try:
-                result[kw]["rising"] = data[kw]["rising"].to_dict('records')
-            except Exception as e:
-                logger.error(f"Error processing 'rising' for keyword '{kw}': {str(e)}")
-                result[kw]["rising"] = []
-        else:
-            result[kw]["rising"] = []
-    else:
-        result[kw] = {"top": [], "rising": []}
+                    # Check if "rising" exists and is valid
+                    if "rising" in data[kw] and data[kw]["rising"] is not None:
+                        logger.info(f"Type of data[kw]['rising']: {type(data[kw]['rising'])}")  # Debugging log
+                        try:
+                            result[kw]["rising"] = data[kw]["rising"].to_dict('records')
+                        except Exception as e:
+                            logger.error(f"Error processing 'rising' for keyword '{kw}': {str(e)}")
+                            result[kw]["rising"] = []
+                    else:
+                        result[kw]["rising"] = []
+                else:
+                    result[kw] = {"top": [], "rising": []}
             
             # Send response
             self.send_response(200)
