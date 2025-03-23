@@ -113,8 +113,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Build payload
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
@@ -189,8 +197,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Build payload
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
@@ -246,8 +262,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
 
             # Build payload FIRST  
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframes, geo=geo)
@@ -322,8 +346,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Get data
             data = pytrends.get_historical_interest(
@@ -386,8 +418,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Build payload
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
@@ -444,8 +484,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Build payload
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
@@ -508,8 +556,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Build payload
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
@@ -569,9 +625,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends with backoff_factor
-            # This helps with rate limiting
-            pytrends = TrendReq(hl=hl, tz=tz, timeout=(10,25), retries=2, backoff_factor=0.5)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz, 
+                timeout=(10,25), 
+                retries=2, 
+                backoff_factor=0.5,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Get data with correct country codes
             # These are the known working formats for different countries
@@ -672,14 +738,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends import dailydata
             import pandas as pd
             
-            # Initialize PyTrends with basic parameters
+            # Initialize PyTrends with custom headers
             pytrends = TrendReq(
                 hl=hl,
                 tz=tz,
                 timeout=(10,25),
                 retries=3,
                 backoff_factor=0.5,
-                requests_args={'verify': False}
+                requests_args={
+                    'verify': False,
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
             )
             
             # Known working country codes
@@ -823,8 +894,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from pytrends.request import TrendReq
             import pandas as pd
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Get data
             data = pytrends.top_charts(date, geo=geo)
@@ -872,8 +951,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Get data
             suggestions = pytrends.suggestions(keyword=keyword)
@@ -918,8 +1005,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
             
-            # Initialize PyTrends
-            pytrends = TrendReq(hl=hl, tz=tz)
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl, 
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
             
             # Get data
             categories = pytrends.categories()
