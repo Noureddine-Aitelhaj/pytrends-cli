@@ -881,7 +881,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Import here to avoid impacting health checks
             import logging
             from pytrends.request import TrendReq
-            from pytrends import dailydata
             import pandas as pd
             
             # Initialize PyTrends with custom headers
@@ -934,89 +933,85 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     list(supported_countries)
                 )
             
-            result = []
+            # Get data with safe parsing
             try:
-                # Attempt realtime API first
+                # Try to get realtime trending searches
                 df = pytrends.realtime_trending_searches(pn=pn)
-                result = self._process_realtime_data(df)
                 
-                if not result:  # Fallback if empty response
-                    raise ValueError("Empty realtime data")
-                    
-            except Exception as e:
-                logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
-                # Fallback to daily trends api 
-                try:
-                    # Try to use daily data API if available
-                    today = datetime.now().strftime('%Y-%m-%d')
-                    df = pytrends.trending_searches(pn=pn)
+                # Safety check for empty dataframe
+                if df is None or df.empty:
+                    logger.warning(f"Empty result from realtime_trending_searches for {pn}")
                     result = []
+                else:
+                    # Handle the result
+                    result = []
+                    for _, row in df.iterrows():
+                        try:
+                            clean_item = {
+                                "title": str(row.get('title', '')),
+                                "traffic": str(row.get('formattedTraffic', '')),
+                            }
+                            
+                            # Safely handle articles
+                            articles = []
+                            if hasattr(row, 'articles') and isinstance(row.articles, list):
+                                for article in row.articles:
+                                    if isinstance(article, dict):
+                                        articles.append({
+                                            "title": article.get('title', ''),
+                                            "url": article.get('url', '')
+                                        })
+                            
+                            clean_item["articles"] = articles
+                            result.append(clean_item)
+                        except Exception as item_error:
+                            logger.warning(f"Error processing item: {str(item_error)}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Error in realtime trending searches: {str(e)}")
+                # Fall back to daily trending searches
+                try:
+                    today = datetime.now().strftime('%Y-%m-%d')
+                    df = pytrends.trending_searches(pn=pn.lower())
+                    
                     if isinstance(df, pd.Series):
-                        for item in df.tolist():
-                            result.append({
-                                "title": item,
-                                "traffic": "Daily trend",
-                                "date": today
-                            })
-                    elif isinstance(df, pd.DataFrame) and len(df.columns) > 0:
-                        column = df.columns[0]
-                        for item in df[column].tolist():
-                            result.append({
-                                "title": item,
-                                "traffic": "Daily trend",
-                                "date": today
-                            })
+                        result = [{"title": term, "date": today} for term in df.tolist()]
+                    elif isinstance(df, pd.DataFrame) and not df.empty:
+                        result = [{"title": term, "date": today} for term in df.iloc[:, 0].tolist()]
+                    else:
+                        result = []
                 except Exception as inner_e:
-                    logger.error(f"Daily trends also failed: {str(inner_e)}")
-                    result = [{"note": "Could not retrieve trending searches"}]
-
+                    logger.error(f"Both realtime and daily trending searches failed: {str(inner_e)}")
+                    result = []
+            
             # Send successful response
-            self._send_success_response({
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
                 "pn": pn,
                 "cat": cat,
                 "data": result
-            })
-
-        except Exception as e:
-            logger.error(f"Critical failure: {str(e)}")
-            logger.error(traceback.format_exc())
-            self._send_error_response(str(e))
-
-    def _process_realtime_data(self, df):
-        """Clean and format realtime data"""
-        if df is None or df.empty:
-            return []
-            
-        clean_result = []
-        for item in df.to_dict('records'):
-            clean_item = {
-                "title": item.get('title', ''),
-                "traffic": item.get('formattedTraffic', ''),
-                "image": item.get('image', {}).get('newsUrl', ''),
-                "articles": [
-                    {"title": art.get('title', ''), "url": art.get('url', '')}
-                    for art in item.get('articles', [])
-                ]
             }
-            clean_result.append(clean_item)
-        return clean_result
-
-    def _process_daily_data(self, df):
-        """Clean and format daily trends data"""
-        if df is None or df.empty:
-            return []
-        try:
-            return df[['title', 'traffic', 'related_queries']].to_dict('records')
-        except:
-            # Fallback if columns are different
-            return df.to_dict('records')
-
-    def _send_success_response(self, data):
-        """Send a successful response"""
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps(data, default=str).encode())
+            
+            self.wfile.write(json.dumps(response, default=str).encode())
+            
+        except Exception as e:
+            logger.error(f"Error processing realtime trending searches request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            
+            self.wfile.write(json.dumps(error_response).encode())
 
     def _send_validation_error(self, message, supported):
         """Send a validation error response"""
@@ -1028,14 +1023,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "message": message,
             "supported_countries": supported
         }
-        self.wfile.write(json.dumps(error_response).encode())
-
-    def _send_error_response(self, message):
-        """Send an error response"""
-        self.send_response(500)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        error_response = {"status": "error", "message": message}
         self.wfile.write(json.dumps(error_response).encode())
     
     def handle_top_charts(self, query):
