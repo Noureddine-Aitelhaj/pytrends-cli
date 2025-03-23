@@ -1,6 +1,6 @@
 # requirements.txt - Update with compatible versions
 numpy
 pandas
-urllib3
+urllib3<2.0.0
 pytrends
 requests
