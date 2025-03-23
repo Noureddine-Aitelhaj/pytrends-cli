@@ -238,8 +238,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             geo = query.get('geo', [''])[0]
             hl = query.get('hl', ['en-US'])[0]
             tz = int(query.get('tz', ['360'])[0])
-            cat = int(query.get('cat', ['0'])[0])
-            
+                        
             logger.info(f"Multirange interest over time request: keywords={keywords}, timeframes={timeframes}, geo={geo}")
             
             # Import here to avoid impacting health checks
