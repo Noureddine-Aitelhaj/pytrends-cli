@@ -7,9 +7,7 @@ import traceback
 import urllib.parse
 from datetime import datetime
 import logging
-import pandas as pd
-from pytrends.request import TrendReq
-from pytrends import dailydata
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
