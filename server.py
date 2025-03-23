@@ -6,7 +6,6 @@ import os
 import traceback
 import urllib.parse
 from datetime import datetime
-import logging
 
 
 # Configure logging
@@ -664,6 +663,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             logger.info(f"Realtime trending searches request: pn={pn}")
             
             # Import here to avoid impacting health checks
+            import logging
             from pytrends.request import TrendReq
             from pytrends import dailydata
             import pandas as pd
