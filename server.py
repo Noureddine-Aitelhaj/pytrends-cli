@@ -933,18 +933,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     list(supported_countries)
                 )
             
-            # Get data with safe parsing
+            result = []
+            data_source = "No data available"
+            
+            # Try to get realtime trending searches
             try:
-                # Try to get realtime trending searches
+                logger.info(f"Attempting to get realtime trending searches for {pn}")
                 df = pytrends.realtime_trending_searches(pn=pn)
                 
-                # Safety check for empty dataframe
-                if df is None or df.empty:
-                    logger.warning(f"Empty result from realtime_trending_searches for {pn}")
-                    result = []
-                else:
-                    # Handle the result
-                    result = []
+                # Process results if not empty
+                if df is not None and not df.empty:
+                    data_source = "realtime"
+                    logger.info(f"Successfully retrieved realtime data for {pn}")
+                    
                     for _, row in df.iterrows():
                         try:
                             clean_item = {
@@ -967,24 +968,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         except Exception as item_error:
                             logger.warning(f"Error processing item: {str(item_error)}")
                             continue
+                else:
+                    logger.warning(f"No realtime data available for {pn}, trying daily trends")
+                    # Try daily trending searches as a fallback
+                    try:
+                        today = datetime.now().strftime('%Y-%m-%d')
+                        daily_df = pytrends.trending_searches(pn=pn.lower())
+                        data_source = "daily"
+                        
+                        if isinstance(daily_df, pd.Series) and len(daily_df) > 0:
+                            logger.info(f"Using daily trend data for {pn} as Series")
+                            result = [{"title": term, "date": today} for term in daily_df.tolist()]
+                        elif isinstance(daily_df, pd.DataFrame) and not daily_df.empty:
+                            logger.info(f"Using daily trend data for {pn} as DataFrame")
+                            result = [{"title": term, "date": today} for term in daily_df.iloc[:, 0].tolist()]
+                        else:
+                            logger.warning(f"Daily trend data for {pn} is also empty")
+                    except Exception as daily_error:
+                        logger.error(f"Error getting daily trends: {str(daily_error)}")
+                        
             except Exception as e:
-                logger.warning(f"Error in realtime trending searches: {str(e)}")
-                # Fall back to daily trending searches
-                try:
-                    today = datetime.now().strftime('%Y-%m-%d')
-                    df = pytrends.trending_searches(pn=pn.lower())
-                    
-                    if isinstance(df, pd.Series):
-                        result = [{"title": term, "date": today} for term in df.tolist()]
-                    elif isinstance(df, pd.DataFrame) and not df.empty:
-                        result = [{"title": term, "date": today} for term in df.iloc[:, 0].tolist()]
-                    else:
-                        result = []
-                except Exception as inner_e:
-                    logger.error(f"Both realtime and daily trending searches failed: {str(inner_e)}")
-                    result = []
-            
-            # Send successful response
+                logger.error(f"Error getting realtime trending searches: {str(e)}")
+                # No fallback to sample data - just return empty results
+                        
+            # Send successful response with whatever data we have (or empty array)
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
@@ -992,6 +999,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             response = {
                 "pn": pn,
                 "cat": cat,
+                "source": data_source,
                 "data": result
             }
             
