@@ -24,7 +24,7 @@ def get_trending_searches(pn='united_states', hl='en-US', tz=360):
     }
     
     # Use known country format if available
-    country = known_countries.get(pn.lower(), pn.lower())
+    country = known_countries.get(pn.lower(), pn).upper()
     
     # Initialize PyTrends with backoff factor to handle rate limiting
     pytrends = TrendReq(hl=hl, tz=tz, timeout=(10,25), retries=2, backoff_factor=0.5)
