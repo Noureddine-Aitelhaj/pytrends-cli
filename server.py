@@ -389,7 +389,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Build payload
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
             
-            # Get data<img src="image url" alt="Image Alt Text" />
+            # Get data
             data = pytrends.interest_by_region(resolution=resolution, inc_low_vol=inc_low_vol, inc_geo_code=inc_geo_code)
             result = data.reset_index().to_dict('records') if not data.empty else []
             
@@ -675,12 +675,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 tz=tz,
                 timeout=(10,25),
                 retries=3,
-                backoff_factor=0.5
+                backoff_factor=0.5,
                 requests_args={'verify': False}
             )
             
-           
-
             # Known working country codes
             supported_countries = [
                 'AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'CO', 'CZ', 'DK',
@@ -714,6 +712,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_validation_error(
                     f"Invalid country code: {pn}",
                     list(supported_countries)
+                )
             
             result = []
             try:
@@ -727,13 +726,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except Exception as e:
                 logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
                 # Fallback to daily trends
-                df = dailydata.get_daily_trends(
-                    geo=pn,
-                    date=datetime.now().strftime('%Y%m%d'),
-                    hl=hl,
-                    tz=tz
-                )
-                result = self._process_daily_data(df)
+                try:
+                    df = dailydata.get_daily_trends(
+                        geo=pn,
+                        date=datetime.now().strftime('%Y%m%d'),
+                        hl=hl
+                    )
+                    result = self._process_daily_data(df)
+                except Exception as inner_e:
+                    logger.error(f"Daily trends also failed: {str(inner_e)}")
+                    result = [{"note": "Could not retrieve trending searches"}]
 
             # Send successful response
             self._send_success_response({
@@ -744,11 +746,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         except Exception as e:
             logger.error(f"Critical failure: {str(e)}")
+            logger.error(traceback.format_exc())
             self._send_error_response(str(e))
 
     def _process_realtime_data(self, df):
         """Clean and format realtime data"""
-        if df.empty:
+        if df is None or df.empty:
             return []
             
         clean_result = []
@@ -767,15 +770,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _process_daily_data(self, df):
         """Clean and format daily trends data"""
-        return df[['title', 'traffic', 'related_queries']].to_dict('records')
+        if df is None or df.empty:
+            return []
+        try:
+            return df[['title', 'traffic', 'related_queries']].to_dict('records')
+        except:
+            # Fallback if columns are different
+            return df.to_dict('records')
 
     def _send_success_response(self, data):
+        """Send a successful response"""
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps(data, default=str).encode())
 
     def _send_validation_error(self, message, supported):
+        """Send a validation error response"""
         self.send_response(400)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
@@ -787,6 +798,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(error_response).encode())
 
     def _send_error_response(self, message):
+        """Send an error response"""
         self.send_response(500)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
