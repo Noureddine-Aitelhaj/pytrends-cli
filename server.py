@@ -608,16 +608,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             hl = query.get('hl', ['en-US'])[0]
             tz = int(query.get('tz', ['360'])[0])
             cat = int(query.get('cat', ['0'])[0])
-            
             logger.info(f"Related topics request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
-            
             # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
             import pandas as pd
-            
             # Initialize PyTrends with custom headers
             pytrends = TrendReq(
-                hl=hl, 
+                hl=hl,
                 tz=tz,
                 requests_args={
                     'headers': {
@@ -625,72 +622,41 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     }
                 }
             )
-            
             # Build payload
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            
             # Get data
             data = pytrends.related_topics()
             result = {}
-            
             for kw in keywords:
                 logger.info(f"Data for keyword '{kw}': {data.get(kw)}")  # Debugging log
-
                 if kw in data:
                     result[kw] = {}
-
-                    # Check if "top" exists and is valid
-                    if "top" in data[kw] and data[kw]["top"] is not None:
-                        logger.info(f"Type of data[kw]['top']: {type(data[kw]['top'])}")  # Debugging log
-                        try:
-                            result[kw]["top"] = data[kw]["top"].to_dict('records')
-                        except Exception as e:
-                            logger.error(f"Error processing 'top' for keyword '{kw}': {str(e)}")
-                            result[kw]["top"] = []
-                    else:
-                        result[kw]["top"] = []
-
-                    # Check if "rising" exists and is valid
-                    if "rising" in data[kw] and data[kw]["rising"] is not None:
-                        logger.info(f"Type of data[kw]['rising']: {type(data[kw]['rising'])}")  # Debugging log
-                        try:
-                            result[kw]["rising"] = data[kw]["rising"].to_dict('records')
-                        except Exception as e:
-                            logger.error(f"Error processing 'rising' for keyword '{kw}': {str(e)}")
-                            result[kw]["rising"] = []
-                    else:
-                        result[kw]["rising"] = []
+                    # Simplify:  Just get the whole data object and include it
+                    result[kw] = data[kw] # Include the full dataset, hopefully it will be enough
                 else:
-                    result[kw] = {"top": [], "rising": []}
-            
+                    result[kw] = {"note": "No related topics found for this keyword."} # Handle keywords with no results
             # Send response
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            
             response = {
                 "keywords": keywords,
                 "timeframe": timeframe,
                 "geo": geo,
                 "data": result
             }
-            
             self.wfile.write(json.dumps(response, default=str).encode())
-            
         except Exception as e:
             logger.error(f"Error processing related topics request: {str(e)}")
             logger.error(traceback.format_exc())
-            
             # Send error response
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            
             error_response = {
                 "status": "error",
                 "message": str(e)
             }
-            
             self.wfile.write(json.dumps(error_response).encode())
     
     def handle_related_queries(self, query):
