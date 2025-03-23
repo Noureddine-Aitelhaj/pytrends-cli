@@ -8,6 +8,7 @@ from datetime import datetime
 import logging
 import signal
 import time
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -29,6 +30,30 @@ class RateLimiter:
 
 # Create a rate limiter: 100 calls per minute
 rate_limiter = RateLimiter(max_calls=100, time_frame=60)
+
+def get_google_suggestions(keyword, num_suggestions=10, language="en", region="us"):
+    """Get autocomplete suggestions from Google"""
+    url = "https://suggestqueries.google.com/complete/search"
+    params = {
+        "client": "firefox",
+        "q": keyword,
+        "hl": language,
+        "gl": region,
+        "ie": "UTF-8",
+        "oe": "UTF-8"
+    }
+    try:
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = json.loads(response.content.decode("utf-8"))
+            suggestions = data[1]
+            return suggestions
+        else:
+            logger.error(f"Error fetching suggestions: {response.status_code}")
+            return []
+    except Exception as e:
+        logger.error(f"Error getting Google suggestions: {str(e)}")
+        return []
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -58,9 +83,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "endpoints": ["/health", "/trends", "/trends/interest-over-time", "/trends/multirange-interest-over-time",
                               "/trends/historical-hourly-interest", "/trends/interest-by-region", "/trends/related-topics",
                               "/trends/related-queries", "/trends/trending-searches", "/trends/realtime-trending-searches",
-                              "/trends/top-charts", "/trends/suggestions", "/trends/categories"]
+                              "/trends/top-charts", "/trends/suggestions", "/trends/categories", "/autocomplete"]
             }
             self.wfile.write(json.dumps(response).encode())
+            return
+        
+        # Google Autocomplete endpoint
+        elif path == '/autocomplete':
+            self.handle_autocomplete(query)
             return
         
         # Original trends endpoint (backward compatibility)
@@ -102,6 +132,57 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.handle_not_implemented()
             return
     
+    def handle_autocomplete(self, query):
+        """Handle Google autocomplete request"""
+        try:
+            # Get parameters
+            keyword = query.get('keyword', [''])[0]
+            num = int(query.get('num', ['10'])[0])
+            language = query.get('language', ['en'])[0]
+            region = query.get('region', ['us'])[0]
+            
+            if not keyword:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Keyword parameter is required"}).encode())
+                return
+
+            logger.info(f"Autocomplete request for keyword: {keyword}, language: {language}, region: {region}")
+            
+            # Get the suggestions
+            suggestions = get_google_suggestions(keyword, num, language, region)
+            
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                "keyword": keyword,
+                "language": language,
+                "region": region,
+                "suggestions": suggestions
+            }
+            
+            self.wfile.write(json.dumps(response).encode())
+            
+        except Exception as e:
+            logger.error(f"Error processing autocomplete request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            
+            self.wfile.write(json.dumps(error_response).encode())
+    
     def handle_not_implemented(self):
         """Handle not implemented endpoints"""
         self.send_response(501)
@@ -112,6 +193,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "message": "Endpoint not implemented yet",
             "available_endpoints": [
                 "/health", 
+                "/autocomplete?keyword=bitcoin&language=en&region=us",
                 "/trends?keywords=keyword1,keyword2", 
                 "/trends/interest-over-time?keywords=keyword1,keyword2",
                 "/trends/multirange-interest-over-time?keywords=keyword1,keyword2&timeframes=2022-01-01 2022-01-31|2022-03-01 2022-03-31",
@@ -550,28 +632,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Get data
             data = pytrends.related_topics()
             result = {}
+            
             for kw in keywords:
                 logger.info(f"Data for keyword '{kw}': {data.get(kw)}")  # Debugging log
 
                 if kw in data:
                     result[kw] = {}
-                    
-                    top_data = data.get(kw, {}).get("top")
-                    if top_data is not None:
-                        logger.info(f"Type of data['{kw}']['top']: {type(top_data)}")  # Debugging log
+
+                    # Check if "top" exists and is valid
+                    if "top" in data[kw] and data[kw]["top"] is not None:
+                        logger.info(f"Type of data[kw]['top']: {type(data[kw]['top'])}")  # Debugging log
                         try:
-                            result[kw]["top"] = top_data.to_dict('records') if hasattr(top_data, 'to_dict') else top_data
+                            result[kw]["top"] = data[kw]["top"].to_dict('records')
                         except Exception as e:
                             logger.error(f"Error processing 'top' for keyword '{kw}': {str(e)}")
                             result[kw]["top"] = []
                     else:
                         result[kw]["top"] = []
 
-                    rising_data = data.get(kw, {}).get("rising")
-                    if rising_data is not None:
-                        logger.info(f"Type of data['{kw}']['rising']: {type(rising_data)}")  # Debugging log
+                    # Check if "rising" exists and is valid
+                    if "rising" in data[kw] and data[kw]["rising"] is not None:
+                        logger.info(f"Type of data[kw]['rising']: {type(data[kw]['rising'])}")  # Debugging log
                         try:
-                            result[kw]["rising"] = rising_data.to_dict('records') if hasattr(rising_data, 'to_dict') else rising_data
+                            result[kw]["rising"] = data[kw]["rising"].to_dict('records')
                         except Exception as e:
                             logger.error(f"Error processing 'rising' for keyword '{kw}': {str(e)}")
                             result[kw]["rising"] = []
