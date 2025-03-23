@@ -85,6 +85,13 @@ def get_realtime_trending_searches(pn='US', hl='en-US', tz=360, cat="all"):
     """Get realtime trending searches for a given country"""
     logger.info(f"Getting realtime trending searches for country: {pn}")
     
+    # Import dependencies
+    import logging
+    from pytrends.request import TrendReq
+    from pytrends import dailydata
+    import pandas as pd
+    from datetime import datetime
+    
     # Known working country codes
     supported_countries = [
         'AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'CO', 'CZ', 'DK',
@@ -94,69 +101,94 @@ def get_realtime_trending_searches(pn='US', hl='en-US', tz=360, cat="all"):
         'SE', 'CH', 'TW', 'TH', 'TR', 'UA', 'GB', 'US', 'VN'
     ]
     
-    # Format pn correctly (uppercase 2-letter country code is most reliable)
-    if len(pn) == 2:
-        pn = pn.upper()
-    else:
-        # Map some common country names to codes
-        country_map = {
-            'united_states': 'US',
-            'united_kingdom': 'GB',
-            'japan': 'JP',
-            'canada': 'CA',
-            'germany': 'DE',
-            'india': 'IN',
-            'australia': 'AU',
-        }
-        pn = country_map.get(pn.lower(), pn.upper())
-    
+    # Convert country names to codes
+    country_map = {
+        'united_states': 'US',
+        'india': 'IN',
+        'brazil': 'BR',
+        'mexico': 'MX',
+        'united_kingdom': 'GB',
+        'france': 'FR',
+        'germany': 'DE',
+        'italy': 'IT',
+        'spain': 'ES',
+        'canada': 'CA',
+        'australia': 'AU',
+        'japan': 'JP'
+    }
+
+    # Normalize country input
+    pn = country_map.get(pn.lower(), pn[:2].upper())
+
     # Validate country code
     if pn not in supported_countries:
-        raise ValueError(f"Country code {pn} not supported. Use one of: {', '.join(supported_countries)}")
+        raise ValueError(f"Invalid country code: {pn}. Supported countries: {', '.join(supported_countries)}")
     
-    # Import dependencies
-    from pytrends.request import TrendReq
-    import pandas as pd
+    # Initialize PyTrends with basic parameters and SSL verification disabled
+    # This improves reliability for some connections
+    pytrends = TrendReq(
+        hl=hl,
+        tz=tz,
+        timeout=(10,25),
+        retries=3,
+        backoff_factor=0.5,
+        requests_args={'verify': False}
+    )
     
-    # Initialize PyTrends with backoff factor to handle rate limiting
-    pytrends = TrendReq(hl=hl, tz=tz, timeout=(10,25), retries=2, backoff_factor=0.5)
-    
-    # Get data
+    result = []
     try:
+        # Attempt realtime API first
         df = pytrends.realtime_trending_searches(pn=pn)
+        result = process_realtime_data(df)
+        
+        if not result:  # Fallback if empty response
+            raise ValueError("Empty realtime data")
+            
     except Exception as e:
-        raise ValueError(f"Failed to get realtime trending searches for {pn}: {str(e)}")
-    
-    if df.empty:
-        return {"error": "No data found", "pn": pn}
-    
-    # Process the result
+        logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
+        # Fallback to daily trends
+        try:
+            df = dailydata.get_daily_trends(
+                geo=pn,
+                date=datetime.now().strftime('%Y%m%d'),
+                hl=hl
+            )
+            result = process_daily_data(df)
+        except Exception as inner_e:
+            logger.error(f"Daily trends also failed: {str(inner_e)}")
+            result = [{"note": "Could not retrieve trending searches"}]
+
+    return {
+        "pn": pn,
+        "cat": cat,
+        "data": result
+    }
+
+def process_realtime_data(df):
+    """Clean and format realtime data"""
+    if df is None or df.empty:
+        return []
+        
+    clean_result = []
+    for item in df.to_dict('records'):
+        clean_item = {
+            "title": item.get('title', ''),
+            "traffic": item.get('formattedTraffic', ''),
+            "image": item.get('image', {}).get('newsUrl', ''),
+            "articles": [
+                {"title": art.get('title', ''), "url": art.get('url', '')}
+                for art in item.get('articles', [])
+            ]
+        }
+        clean_result.append(clean_item)
+    return clean_result
+
+def process_daily_data(df):
+    """Clean and format daily trends data"""
+    if df is None or df.empty:
+        return []
     try:
-        result = df.to_dict('records')
-        
-        # Clean up and format results
-        clean_result = []
-        for item in result:
-            clean_item = {}
-            for k, v in item.items():
-                if isinstance(v, pd.Timestamp):
-                    clean_item[k] = v.isoformat()
-                elif isinstance(v, list) and len(v) == 1:
-                    clean_item[k] = v[0]
-                else:
-                    clean_item[k] = v
-            clean_result.append(clean_item)
-        
-        return {
-            "pn": pn,
-            "cat": cat,
-            "data": clean_result
-        }
-    except Exception as e:
-        # Fallback if standard conversion fails
-        logger.warning(f"Standard conversion failed, using fallback: {str(e)}")
-        return {
-            "pn": pn,
-            "cat": cat,
-            "data": {"raw_data": str(df)}
-        }
+        return df[['title', 'traffic', 'related_queries']].to_dict('records')
+    except:
+        # Fallback if columns are different
+        return df.to_dict('records')
