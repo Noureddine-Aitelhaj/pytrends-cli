@@ -274,7 +274,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             )
 
             # Build payload FIRST  
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframes, geo=geo)
+            pytrends.build_payload(keywords, timeframe=timeframes)
             
             # Execute multirange request
             data = pytrends.multirange_interest_over_time()
