@@ -599,89 +599,89 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(error_response).encode())
     
     def handle_related_topics(self, query):
-    """Handle related topics endpoint"""
-    try:
-        # Get parameters
-        keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-        timeframe = query.get('timeframe', ['today 3-m'])[0]
-        geo = query.get('geo', [''])[0]
-        hl = query.get('hl', ['en-US'])[0]
-        tz = int(query.get('tz', ['360'])[0])
-        cat = int(query.get('cat', ['0'])[0])
+        """Handle related topics endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframe = query.get('timeframe', ['today 3-m'])[0]
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
 
-        logger.info(f"Related topics request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
+            logger.info(f"Related topics request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
 
-        # Import here to avoid impacting health checks
-        from pytrends.request import TrendReq
-        import pandas as pd
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
 
-        # Initialize PyTrends with custom headers
-        pytrends = TrendReq(
-            hl=hl,
-            tz=tz,
-            requests_args={
-                'headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
                 }
-            }
-        )
+            )
 
-        # Build payload
-        pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
 
-        # Get data
-        data = pytrends.related_topics()
-        result = {}
+            # Get data
+            data = pytrends.related_topics()
+            result = {}
 
-        for kw in keywords:
-            logger.info(f"Processing data for keyword '{kw}'")  # Debugging log
-            
-            if kw in data:
-                result[kw] = {}
+            for kw in keywords:
+                logger.info(f"Processing data for keyword '{kw}'")  # Debugging log
                 
-                # Check for top topics
-                if data[kw]['top'] is not None:
-                    result[kw]['top'] = data[kw]['top'].to_dict('records')
-                else:
-                    result[kw]['top'] = []
+                if kw in data:
+                    result[kw] = {}
                     
-                # Check for rising topics
-                if data[kw]['rising'] is not None:
-                    result[kw]['rising'] = data[kw]['rising'].to_dict('records')
+                    # Check for top topics
+                    if data[kw]['top'] is not None:
+                        result[kw]['top'] = data[kw]['top'].to_dict('records')
+                    else:
+                        result[kw]['top'] = []
+                        
+                    # Check for rising topics
+                    if data[kw]['rising'] is not None:
+                        result[kw]['rising'] = data[kw]['rising'].to_dict('records')
+                    else:
+                        result[kw]['rising'] = []
                 else:
-                    result[kw]['rising'] = []
-            else:
-                result[kw] = {"top": [], "rising": []}
+                    result[kw] = {"top": [], "rising": []}
 
-        # Send response
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
 
-        response = {
-            "keywords": keywords,
-            "timeframe": timeframe,
-            "geo": geo,
-            "data": result
-        }
+            response = {
+                "keywords": keywords,
+                "timeframe": timeframe,
+                "geo": geo,
+                "data": result
+            }
 
-        self.wfile.write(json.dumps(response, default=str).encode())
+            self.wfile.write(json.dumps(response, default=str).encode())
 
-    except Exception as e:
-        logger.error(f"Error processing related topics request: {str(e)}")
-        logger.error(traceback.format_exc())
+        except Exception as e:
+            logger.error(f"Error processing related topics request: {str(e)}")
+            logger.error(traceback.format_exc())
 
-        # Send error response
-        self.send_response(500)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
 
-        error_response = {
-            "status": "error",
-            "message": str(e)
-        }
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
 
-        self.wfile.write(json.dumps(error_response).encode())
+            self.wfile.write(json.dumps(error_response).encode())
     
     def handle_related_queries(self, query):
         """Handle related queries endpoint"""
