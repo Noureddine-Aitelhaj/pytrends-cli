@@ -501,13 +501,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Get data
             data = pytrends.related_topics()
             result = {}
-            
-            for kw in keywords:
-                if kw in data and data[kw]:
-                    result[kw] = {
-                        "top": data[kw]["top"].to_dict('records') if data[kw]["top"] is not None else [],
-                        "rising": data[kw]["rising"].to_dict('records') if data[kw]["rising"] is not None else []
-                    }
+for kw in keywords:
+    if kw in data and data[kw]:
+        top_data = data[kw].get("top")
+        rising_data = data[kw].get("rising")
+        
+        result[kw] = {
+            "top": top_data.to_dict('records') if top_data is not None else,
+            "rising": rising_data.to_dict('records') if rising_data is not None else
+        }
             
             # Send response
             self.send_response(200)
