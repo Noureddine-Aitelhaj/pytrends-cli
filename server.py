@@ -272,16 +272,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     }
                 }
             )
-
-            # For multirange, we need to build the payload with the first timeframe
-            # then call the multirange method with all timeframes
-            if len(timeframes) > 0:
-                first_timeframe = timeframes[0]
-                pytrends.build_payload(keywords, cat=cat, timeframe=first_timeframe, geo=geo)
-                
-                # Get data - passing the timeframes separately (not in build_payload)
-                data = pytrends.multirange_interest_over_time(timeframes)
-                result = data.reset_index().to_dict('records') if not data.empty else []
+            
+            # Collect data for each timeframe
+            all_data = []
+            
+            for timeframe in timeframes:
+                try:
+                    # Build payload for this timeframe
+                    pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+                    
+                    # Get data
+                    data = pytrends.interest_over_time()
+                    if not data.empty:
+                        # Add a timeframe column to identify the source
+                        data['timeframe'] = timeframe
+                        all_data.append(data)
+                except Exception as inner_e:
+                    logger.warning(f"Error with timeframe {timeframe}: {str(inner_e)}")
+            
+            # Combine all data frames
+            if all_data:
+                combined_data = pd.concat(all_data)
+                result = combined_data.reset_index().to_dict('records')
             else:
                 result = []
             
@@ -823,14 +835,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     
             except Exception as e:
                 logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
-                # Fallback to daily trends (note: fixed method name)
+                # Fallback to daily trends api 
                 try:
-                    df = dailydata.get_daily_data(
-                        trendreq=pytrends,
-                        geo=pn,
-                        date=datetime.now().strftime('%Y%m%d')
-                    )
-                    result = self._process_daily_data(df)
+                    # Try to use daily data API if available
+                    today = datetime.now().strftime('%Y-%m-%d')
+                    df = pytrends.trending_searches(pn=pn)
+                    result = []
+                    if isinstance(df, pd.Series):
+                        for item in df.tolist():
+                            result.append({
+                                "title": item,
+                                "traffic": "Daily trend",
+                                "date": today
+                            })
+                    elif isinstance(df, pd.DataFrame) and len(df.columns) > 0:
+                        column = df.columns[0]
+                        for item in df[column].tolist():
+                            result.append({
+                                "title": item,
+                                "traffic": "Daily trend",
+                                "date": today
+                            })
                 except Exception as inner_e:
                     logger.error(f"Daily trends also failed: {str(inner_e)}")
                     result = [{"note": "Could not retrieve trending searches"}]
