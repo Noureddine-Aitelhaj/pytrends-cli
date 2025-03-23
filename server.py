@@ -249,7 +249,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pytrends = TrendReq(hl=hl, tz=tz)
             
             # Execute multirange request
-            data = pytrends.multirange_interest_over_time(keywords, cat=cat, timeframe=timeframes, geo=geo)
+            data = pytrends.multirange_interest_over_time(keywords, timeframe=timeframes, geo=geo)
             result = data.reset_index().to_dict('records') if not data.empty else []
             
             # Send response
