@@ -7,6 +7,9 @@ import traceback
 import urllib.parse
 from datetime import datetime
 import logging
+import pandas as pd
+from pytrends.request import TrendReq
+from pytrends import dailydata
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -655,15 +658,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """Handle realtime trending searches endpoint"""
         try:
             # Get parameters
-            pn = query.get('pn', ['US'])[0]
+            pn = query.get('pn', ['US'])[0].upper()  # Force uppercase for realtime
             hl = query.get('hl', ['en-US'])[0]
             tz = int(query.get('tz', ['360'])[0])
             cat = query.get('cat', ['all'])[0]
             
-            logger.info(f"Realtime trending searches request: pn={pn}, cat={cat}")
+            logger.info(f"Realtime trending searches request: pn={pn}")
             
             # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
+            from pytrends import dailydata
             import pandas as pd
             
             # Initialize PyTrends with basic parameters
@@ -671,11 +675,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 hl=hl,
                 tz=tz,
                 timeout=(10,25),
-                retries=2,
+                retries=3,
                 backoff_factor=0.5
+                requests_args={'verify': False}
             )
             
-            # Removed the _get_google_cookies() call
+           
 
             # Known working country codes
             supported_countries = [
@@ -686,93 +691,108 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 'SE', 'CH', 'TW', 'TH', 'TR', 'UA', 'GB', 'US', 'VN'
             ]
             
-            # Format pn correctly (uppercase 2-letter country code is most reliable)
-            if len(pn) == 2:
-                pn = pn.upper()
-            else:
-                # Map some common country names to codes
-                country_map = {
-                    'united_states': 'US',
-                    'united_kingdom': 'GB',
-                    'japan': 'JP',
-                    'canada': 'CA',
-                    'germany': 'DE',
-                    'india': 'IN',
-                    'australia': 'AU',
-                }
-                pn = country_map.get(pn.lower(), pn.upper())
-            
+            # Convert country names to codes
+            country_map = {
+                'united_states': 'US',
+                'india': 'IN',
+                'brazil': 'BR',
+                'mexico': 'MX',
+                'united_kingdom': 'GB',
+                'france': 'FR',
+                'germany': 'DE',
+                'italy': 'IT',
+                'spain': 'ES',
+                'canada': 'CA',
+                'australia': 'AU',
+                'japan': 'JP'
+            }
+
+            # Normalize country input
+            pn = country_map.get(pn.lower(), pn[:2].upper())
+
             # Validate country code
             if pn not in supported_countries:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {
-                    "status": "error", 
-                    "message": f"Country code {pn} not supported. Use a 2-letter ISO country code from the supported list.",
-                    "supported_countries": supported_countries
-                }
-                self.wfile.write(json.dumps(error_response).encode())
-                return
+                return self._send_validation_error(
+                    f"Invalid country code: {pn}",
+                    list(supported_countries)
             
-            # Get data
+            result = []
             try:
+                # Attempt realtime API first
                 df = pytrends.realtime_trending_searches(pn=pn)
+                result = self._process_realtime_data(df)
                 
-                if df.empty:
-                    result = []
-                else:
-                    # The realtime trending searches dataframe has a specific structure
-                    # Make it more user-friendly
-                    result = df.to_dict('records')
-                    
-                    # Clean up the result to make it more readable
-                    clean_result = []
-                    for item in result:
-                        clean_item = {}
-                        for k, v in item.items():
-                            if isinstance(v, pd.Timestamp):
-                                clean_item[k] = v.isoformat()
-                            elif isinstance(v, list) and len(v) == 1:
-                                clean_item[k] = v[0]
-                            else:
-                                clean_item[k] = v
-                        clean_result.append(clean_item)
-                    
-                    result = clean_result
+                if not result:  # Fallback if empty response
+                    raise ValueError("Empty realtime data")
                     
             except Exception as e:
-                logger.error(f"Error getting realtime trending searches: {str(e)}")
-                result = {"error": f"Failed to get realtime trending searches: {str(e)}"}
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            response = {
+                logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
+                # Fallback to daily trends
+                df = dailydata.get_daily_trends(
+                    geo=pn,
+                    date=datetime.now().strftime('%Y%m%d'),
+                    hl=hl,
+                    tz=tz
+                )
+                result = self._process_daily_data(df)
+
+            # Send successful response
+            self._send_success_response({
                 "pn": pn,
                 "cat": cat,
                 "data": result
-            }
-            
-            self.wfile.write(json.dumps(response, default=str).encode())
-            
+            })
+
         except Exception as e:
-            logger.error(f"Error processing realtime trending searches request: {str(e)}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Critical failure: {str(e)}")
+            self._send_error_response(str(e))
+
+    def _process_realtime_data(self, df):
+        """Clean and format realtime data"""
+        if df.empty:
+            return []
             
-            # Send error response
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            
-            error_response = {
-                "status": "error",
-                "message": str(e)
+        clean_result = []
+        for item in df.to_dict('records'):
+            clean_item = {
+                "title": item.get('title', ''),
+                "traffic": item.get('formattedTraffic', ''),
+                "image": item.get('image', {}).get('newsUrl', ''),
+                "articles": [
+                    {"title": art.get('title', ''), "url": art.get('url', '')}
+                    for art in item.get('articles', [])
+                ]
             }
-            
-            self.wfile.write(json.dumps(error_response).encode())
+            clean_result.append(clean_item)
+        return clean_result
+
+    def _process_daily_data(self, df):
+        """Clean and format daily trends data"""
+        return df[['title', 'traffic', 'related_queries']].to_dict('records')
+
+    def _send_success_response(self, data):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data, default=str).encode())
+
+    def _send_validation_error(self, message, supported):
+        self.send_response(400)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        error_response = {
+            "status": "error",
+            "message": message,
+            "supported_countries": supported
+        }
+        self.wfile.write(json.dumps(error_response).encode())
+
+    def _send_error_response(self, message):
+        self.send_response(500)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        error_response = {"status": "error", "message": message}
+        self.wfile.write(json.dumps(error_response).encode())
     
     def handle_top_charts(self, query):
         """Handle top charts endpoint"""
