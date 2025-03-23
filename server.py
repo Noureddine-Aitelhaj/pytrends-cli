@@ -273,12 +273,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 }
             )
 
-            # Build payload FIRST  
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframes, geo=geo)
-            
-            # Execute multirange request
-            data = pytrends.multirange_interest_over_time()
-            result = data.reset_index().to_dict('records') if not data.empty else []
+            # For multirange, we need to build the payload with the first timeframe
+            # then call the multirange method with all timeframes
+            if len(timeframes) > 0:
+                first_timeframe = timeframes[0]
+                pytrends.build_payload(keywords, cat=cat, timeframe=first_timeframe, geo=geo)
+                
+                # Get data - passing the timeframes separately (not in build_payload)
+                data = pytrends.multirange_interest_over_time(timeframes)
+                result = data.reset_index().to_dict('records') if not data.empty else []
+            else:
+                result = []
             
             # Send response
             self.send_response(200)
@@ -504,13 +509,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             
             for kw in keywords:
                 if kw in data and data[kw]:
-                    top_data = data[kw].get("top")
-                    rising_data = data[kw].get("rising")
+                    result[kw] = {}
                     
-                    result[kw] = {
-                        "top": top_data.to_dict('records') if top_data is not None else [],
-                        "rising": rising_data.to_dict('records') if rising_data is not None else []
-                    }
+                    # Check if "top" exists and is valid
+                    if "top" in data[kw] and data[kw]["top"] is not None:
+                        try:
+                            result[kw]["top"] = data[kw]["top"].to_dict('records')
+                        except:
+                            result[kw]["top"] = []
+                    else:
+                        result[kw]["top"] = []
+                    
+                    # Check if "rising" exists and is valid
+                    if "rising" in data[kw] and data[kw]["rising"] is not None:
+                        try:
+                            result[kw]["rising"] = data[kw]["rising"].to_dict('records')
+                        except:
+                            result[kw]["rising"] = []
+                    else:
+                        result[kw]["rising"] = []
+                else:
+                    result[kw] = {"top": [], "rising": []}
             
             # Send response
             self.send_response(200)
@@ -583,6 +602,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         "top": data[kw]["top"].to_dict('records') if data[kw]["top"] is not None else [],
                         "rising": data[kw]["rising"].to_dict('records') if data[kw]["rising"] is not None else []
                     }
+                else:
+                    result[kw] = {"top": [], "rising": []}
             
             # Send response
             self.send_response(200)
@@ -802,12 +823,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     
             except Exception as e:
                 logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
-                # Fallback to daily trends
+                # Fallback to daily trends (note: fixed method name)
                 try:
                     df = dailydata.get_daily_data(
+                        trendreq=pytrends,
                         geo=pn,
-                        date=datetime.now().strftime('%Y%m%d'),
-                        hl=hl
+                        date=datetime.now().strftime('%Y%m%d')
                     )
                     result = self._process_daily_data(df)
                 except Exception as inner_e:
