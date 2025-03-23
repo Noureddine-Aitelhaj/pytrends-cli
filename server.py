@@ -548,38 +548,38 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
             
             # Get data
-            data = pytrends.related_topics()
-            result = {}
-            
-            for kw in keywords:
-                logger.info(f"Data for keyword '{kw}': {data.get(kw)}")  # Debugging log
+data = pytrends.related_topics()
+result = {}
+for kw in keywords:
+    logger.info(f"Data for keyword '{kw}': {data.get(kw)}")  # Debugging log
 
-                if kw in data:
-                    result[kw] = {}
+    if kw in data:
+        result[kw] = {}
+        
+        top_data = data.get(kw, {}).get("top")
+        if top_data is not None:
+            logger.info(f"Type of data['{kw}']['top']: {type(top_data)}")  # Debugging log
+            try:
+                result[kw]["top"] = top_data.to_dict('records') if hasattr(top_data, 'to_dict') else top_data
+            except Exception as e:
+                logger.error(f"Error processing 'top' for keyword '{kw}': {str(e)}")
+                result[kw]["top"] = []
+        else:
+            result[kw]["top"] = []
 
-                    # Check if "top" exists and is valid
-                    if "top" in data[kw] and data[kw]["top"] is not None:
-                        logger.info(f"Type of data[kw]['top']: {type(data[kw]['top'])}")  # Debugging log
-                        try:
-                            result[kw]["top"] = data[kw]["top"].to_dict('records')
-                        except Exception as e:
-                            logger.error(f"Error processing 'top' for keyword '{kw}': {str(e)}")
-                            result[kw]["top"] = []
-                    else:
-                        result[kw]["top"] = []
+        rising_data = data.get(kw, {}).get("rising")
+        if rising_data is not None:
+            logger.info(f"Type of data['{kw}']['rising']: {type(rising_data)}")  # Debugging log
+            try:
+                result[kw]["rising"] = rising_data.to_dict('records') if hasattr(rising_data, 'to_dict') else rising_data
+            except Exception as e:
+                logger.error(f"Error processing 'rising' for keyword '{kw}': {str(e)}")
+                result[kw]["rising"] = []
+        else:
+            result[kw]["rising"] = []
+    else:
+        result[kw] = {"top": [], "rising": []}
 
-                    # Check if "rising" exists and is valid
-                    if "rising" in data[kw] and data[kw]["rising"] is not None:
-                        logger.info(f"Type of data[kw]['rising']: {type(data[kw]['rising'])}")  # Debugging log
-                        try:
-                            result[kw]["rising"] = data[kw]["rising"].to_dict('records')
-                        except Exception as e:
-                            logger.error(f"Error processing 'rising' for keyword '{kw}': {str(e)}")
-                            result[kw]["rising"] = []
-                    else:
-                        result[kw]["rising"] = []
-                else:
-                    result[kw] = {"top": [], "rising": []}
             
             # Send response
             self.send_response(200)
