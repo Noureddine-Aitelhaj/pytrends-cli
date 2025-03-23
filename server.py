@@ -520,28 +520,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             result = {}
             
             for kw in keywords:
-                if kw in data and data[kw]:
-                    result[kw] = {}
-                    
-                    # Check if "top" exists and is valid
-                    if "top" in data[kw] and data[kw]["top"] is not None:
-                        try:
-                            result[kw]["top"] = data[kw]["top"].to_dict('records')
-                        except:
-                            result[kw]["top"] = []
-                    else:
-                        result[kw]["top"] = []
-                    
-                    # Check if "rising" exists and is valid
-                    if "rising" in data[kw] and data[kw]["rising"] is not None:
-                        try:
-                            result[kw]["rising"] = data[kw]["rising"].to_dict('records')
-                        except:
-                            result[kw]["rising"] = []
-                    else:
-                        result[kw]["rising"] = []
-                else:
-                    result[kw] = {"top": [], "rising": []}
+    logger.info(f"Data for keyword '{kw}': {data.get(kw)}")  # Debugging log
+
+    if kw in data:
+        result[kw] = {}
+
+        # Check if "top" exists and is valid
+        if "top" in data[kw] and data[kw]["top"] is not None:
+            logger.info(f"Type of data[kw]['top']: {type(data[kw]['top'])}")  # Debugging log
+            try:
+                result[kw]["top"] = data[kw]["top"].to_dict('records')
+            except Exception as e:
+                logger.error(f"Error processing 'top' for keyword '{kw}': {str(e)}")
+                result[kw]["top"] = []
+        else:
+            result[kw]["top"] = []
+
+        # Check if "rising" exists and is valid
+        if "rising" in data[kw] and data[kw]["rising"] is not None:
+            logger.info(f"Type of data[kw]['rising']: {type(data[kw]['rising'])}")  # Debugging log
+            try:
+                result[kw]["rising"] = data[kw]["rising"].to_dict('records')
+            except Exception as e:
+                logger.error(f"Error processing 'rising' for keyword '{kw}': {str(e)}")
+                result[kw]["rising"] = []
+        else:
+            result[kw]["rising"] = []
+    else:
+        result[kw] = {"top": [], "rising": []}
             
             # Send response
             self.send_response(200)
