@@ -8,7 +8,7 @@ pip install numpy
 
 echo "Installing other dependencies..."
 pip install pandas
-pip install urllib3<2.0.0
+pip install urllib3
 pip install pytrends
 pip install requests
 pip install googlesearch-python
