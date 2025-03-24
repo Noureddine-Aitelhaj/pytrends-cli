@@ -246,7 +246,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
                     # Process advanced results
                     results = []
-                    for result_index. result in enumerate(search_results, start=1):
+                    for result_index, result in enumerate(search_results, start=1):
                         results.append({
                             "title": result.title,
                             "url": result.url,
