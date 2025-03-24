@@ -1,5 +1,5 @@
 #!/bin/bash
-# install_dependencies.sh - Create this file
+# install_dependencies.sh
 
 set -e
 
@@ -8,9 +8,10 @@ pip install numpy
 
 echo "Installing other dependencies..."
 pip install pandas
-pip install 'urllib3<2.0.0'
+pip install urllib3<2.0.0
 pip install pytrends
 pip install requests
+pip install googlesearch-python
 
 echo "Installation completed successfully"
 pip list
