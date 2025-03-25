@@ -1,3 +1,4 @@
+python
 import http.server
 import socketserver
 import json
@@ -139,13 +140,12 @@ def get_trending_searches(pn='united_states', hl='en-US', tz=360):
         else:
             raise ValueError(f"Failed to get trending searches for {pn}: {str(e)}")
 
-def get_realtime_trending_searches(pn='US', hl='en-US', tz=360, cat="all"):
+def get_realtime_trending_searches(pn='US', hl='en-US', tz=360, cat="all", count=300):
     """Get realtime trending searches for a given country"""
-    logger.info(f"Getting realtime trending searches for country: {pn}")
+    logger.info(f"Getting realtime trending searches for country: {pn}, count={count}")
     
     # Import dependencies
     from pytrends.request import TrendReq
-    from pytrends import dailydata
     import pandas as pd
     from datetime import datetime
     
@@ -192,63 +192,63 @@ def get_realtime_trending_searches(pn='US', hl='en-US', tz=360, cat="all"):
         requests_args={'verify': False}
     )
     
-    result = []
     try:
-        # Attempt realtime API first
-        df = pytrends.realtime_trending_searches(pn=pn)
-        result = process_realtime_data(df)
+        # Call the realtime_trending_searches method with all parameters
+        df = pytrends.realtime_trending_searches(pn=pn, cat=cat, count=count)
         
-        if not result:  # Fallback if empty response
-            raise ValueError("Empty realtime data")
+        if df is None or df.empty:
+            return {"pn": pn, "cat": cat, "data": []}
             
+        # Process the data
+        result = []
+        for item in df.to_dict("records"):
+            result.append({
+                "title": item.get("title", ""),
+                "entities": item.get("entityNames", [])
+            })
+            
+        return {
+            "pn": pn,
+            "cat": cat,
+            "data": result
+        }
     except Exception as e:
-        logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
-        # Fallback to daily trends
+        logger.warning(f"Realtime failed: {str(e)}, trying today's searches")
         try:
-            df = dailydata.get_daily_trends(
-                geo=pn,
-                date=datetime.now().strftime('%Y%m%d'),
-                hl=hl
-            )
-            result = process_daily_data(df)
+            df = pytrends.today_searches(pn=pn)
+            result = [{"title": title} for title in df]
+            return {
+                "pn": pn,
+                "cat": cat,
+                "data": result,
+                "note": "Used daily trends as fallback"
+            }
         except Exception as inner_e:
             logger.error(f"Daily trends also failed: {str(inner_e)}")
-            result = [{"note": "Could not retrieve trending searches"}]
-
-    return {
-        "pn": pn,
-        "cat": cat,
-        "data": result
-    }
+            return {
+                "pn": pn,
+                "cat": cat,
+                "data": [{"note": "Could not retrieve trending searches"}],
+                "error": str(e)
+            }
 
 def process_realtime_data(df):
     """Clean and format realtime data"""
     if df is None or df.empty:
         return []
-        
-    clean_result = []
-    for item in df.to_dict('records'):
-        clean_item = {
-            "title": item.get('title', ''),
-            "traffic": item.get('formattedTraffic', ''),
-            "image": item.get('image', {}).get('newsUrl', ''),
-            "articles": [
-                {"title": art.get('title', ''), "url": art.get('url', '')}
-                for art in item.get('articles', [])
-            ]
+    return [
+        {
+            "title": item.get("title", ""),
+            "entities": item.get("entityNames", [])
         }
-        clean_result.append(clean_item)
-    return clean_result
+        for item in df.to_dict("records")
+    ]
 
 def process_daily_data(df):
     """Clean and format daily trends data"""
     if df is None or df.empty:
         return []
-    try:
-        return df[['title', 'traffic', 'related_queries']].to_dict('records')
-    except:
-        # Fallback if columns are different
-        return df.to_dict('records')
+    return [{"title": title} for title in df]
 
 def google_search(query, num_results=10, lang="en", proxy=None, advanced=False, sleep_interval=0, timeout=5):
     """
@@ -1053,28 +1053,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 }
             )
 
-            # Collect data for each timeframe
-            all_data = []
-            for timeframe in timeframes:
-                try:
-                    # Build payload for this timeframe
-                    pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframes, geo=geo)
 
-                    # Get data
-                    data = pytrends.interest_over_time()
-                    if not data.empty:
-                        # Add a timeframe column to identify the source
-                        data['timeframe'] = timeframe
-                        all_data.append(data)
-                except Exception as inner_e:
-                    logger.warning(f"Error with timeframe {timeframe}: {str(inner_e)}")
-
-            # Combine all data frames
-            if all_data:
-                combined_data = pd.concat(all_data)
-                result = combined_data.reset_index().to_dict('records')
-            else:
-                result = []
+            # Get data
+            data = pytrends.multirange_interest_over_time()
+            result = data.reset_index().to_dict('records') if not data.empty else []
 
             # Send response
             self.send_response(200)
@@ -1137,7 +1121,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Import here to avoid impacting health checks
             from pytrends.request import TrendReq
             import pandas as pd
-
+            
             # Initialize PyTrends with custom headers
             pytrends = TrendReq(
                 hl=hl,
@@ -1150,20 +1134,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             )
 
             # Get data
-            data = pytrends.get_historical_interest(
-                keywords,
-                year_start=year_start,
-                month_start=month_start,
-                day_start=day_start,
-                hour_start=hour_start,
-                year_end=year_end,
-                month_end=month_end,
-                day_end=day_end,
-                hour_end=hour_end,
-                cat=cat,
+            from pytrends import dailydata
+            # This functionality is handled by the dailydata module now
+            data = dailydata.get_daily_data(
+                keyword=keywords[0] if keywords else "bitcoin",
+                start_year=year_start,
+                start_mon=month_start,
+                start_day=day_start,
+                stop_year=year_end,
+                stop_mon=month_end,
+                stop_day=day_end,
                 geo=geo,
-                gprop='',
-                sleep=sleep
+                verbose=False
             )
             result = data.reset_index().to_dict('records') if not data.empty else []
 
@@ -1446,11 +1428,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             hl = query.get('hl', ['en-US'])[0]
             tz = int(query.get('tz', ['360'])[0])
             cat = query.get('cat', ['all'])[0]
+            count = int(query.get('count', ['300'])[0])
 
-            logger.info(f"Realtime trending searches request: pn={pn}")
+            logger.info(f"Realtime trending searches request: pn={pn}, count={count}")
 
             # Use the get_realtime_trending_searches function from CLI
-            result = get_realtime_trending_searches(pn=pn, hl=hl, tz=tz, cat=cat)
+            result = get_realtime_trending_searches(pn=pn, hl=hl, tz=tz, cat=cat, count=count)
 
             # Send successful response
             self.send_response(200)
