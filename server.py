@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Python HTTP Server for Google Search, Autocomplete, and Trends APIs.
-Provides various endpoints to interact with Google services.
-"""
-
 import http.server
 import socketserver
 import json
@@ -13,936 +7,1646 @@ import urllib.parse
 from datetime import datetime
 import logging
 import signal
-import sys
 import time
 import requests
 
-# --- Configuration ---
-
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)] # Ensure logs go to stdout for container environments
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Server Port
-PORT = int(os.environ.get('PORT', 8080))
-
-# Rate Limiter Configuration
-MAX_CALLS_PER_MINUTE = 100
-RATE_LIMIT_TIMEFRAME = 60  # seconds
-
-# Disable SSL verification warnings for pytrends if needed (use with caution)
-# import warnings
-# from requests.packages.urllib3.exceptions import InsecureRequestWarning
-# warnings.simplefilter('ignore', InsecureRequestWarning)
-
-# --- Rate Limiter ---
-
 class RateLimiter:
-    """Simple in-memory rate limiter."""
     def __init__(self, max_calls, time_frame):
         self.max_calls = max_calls
         self.time_frame = time_frame
         self.calls = []
-        logger.info(f"Rate limiter initialized: Max {max_calls} calls per {time_frame} seconds.")
 
     def add_call(self):
-        """Record a call timestamp."""
         now = time.time()
-        # Remove calls older than the time frame
         self.calls = [call for call in self.calls if call > now - self.time_frame]
         self.calls.append(now)
 
     def is_allowed(self):
-        """Check if a call is allowed."""
-        now = time.time()
-        # Clean up old calls first
-        self.calls = [call for call in self.calls if call > now - self.time_frame]
-        # Check if current number of calls is below the maximum
-        allowed = len(self.calls) < self.max_calls
-        if not allowed:
-            logger.warning(f"Rate limit exceeded. Current calls: {len(self.calls)} >= Max: {self.max_calls}")
-        return allowed
+        return len(self.calls) < self.max_calls
 
-# Initialize the rate limiter
-rate_limiter = RateLimiter(max_calls=MAX_CALLS_PER_MINUTE, time_frame=RATE_LIMIT_TIMEFRAME)
-
-# --- Core Functionality (External API Wrappers) ---
+# Create a rate limiter: 100 calls per minute
+rate_limiter = RateLimiter(max_calls=100, time_frame=60)
 
 def get_google_suggestions(keyword, num_suggestions=10, language="en", region="us"):
-    """Get autocomplete suggestions from Google Suggest API."""
-    logger.info(f"Fetching Google suggestions for keyword: '{keyword}', lang: {language}, region: {region}")
+    """Get autocomplete suggestions from Google"""
     url = "https://suggestqueries.google.com/complete/search"
     params = {
-        "client": "firefox",  # Provides JSON response
+        "client": "firefox",
         "q": keyword,
         "hl": language,
         "gl": region,
         "ie": "UTF-8",
         "oe": "UTF-8"
     }
-
+    
     try:
-        response = requests.get(url, params=params, timeout=5) # Added timeout
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-
-        data = response.json() # Use response.json() for automatic decoding
-        if len(data) > 1 and isinstance(data[1], list):
-            suggestions = data[1][:num_suggestions] # Limit results if needed
-            logger.info(f"Successfully fetched {len(suggestions)} suggestions.")
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = json.loads(response.content.decode("utf-8"))
+            suggestions = data[1]
             return suggestions
         else:
-            logger.warning(f"Unexpected response format from Google Suggest: {data}")
+            logger.error(f"Error fetching suggestions: {response.status_code}")
             return []
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching Google suggestions: {str(e)}")
-        return []
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON response from Google Suggest: {str(e)}")
-        return []
     except Exception as e:
-        logger.error(f"Unexpected error getting Google suggestions: {str(e)}", exc_info=True)
+        logger.error(f"Error getting Google suggestions: {str(e)}")
         return []
 
 def get_trending_searches(pn='united_states', hl='en-US', tz=360):
-    """Get daily trending searches for a given country using pytrends."""
-    logger.info(f"Getting daily trending searches for country: {pn}, lang: {hl}")
-
-    # Import dependencies only when needed
-    try:
-        from pytrends.request import TrendReq
-        import pandas as pd
-    except ImportError as e:
-        logger.error(f"Missing dependency for trending searches: {e}")
-        raise ImportError(f"pytrends or pandas not installed. Cannot get trending searches.")
-
-    # Known working country formats for pytrends daily trends
+    """Get trending searches for a given country"""
+    logger.info(f"Getting trending searches for country: {pn}")
+    
+    # Import dependencies
+    from pytrends.request import TrendReq
+    import pandas as pd
+    
+    # Known working country formats
     known_countries = {
-        'united_states': 'united_states', 'us': 'united_states',
-        'united_kingdom': 'united_kingdom', 'uk': 'united_kingdom', 'gb': 'united_kingdom',
-        'japan': 'japan', 'jp': 'japan',
-        'canada': 'canada', 'ca': 'canada',
-        'germany': 'germany', 'de': 'germany',
-        'india': 'india', 'in': 'india',
-        'australia': 'australia', 'au': 'australia',
-        'brazil': 'brazil', 'br': 'brazil',
-        'france': 'france', 'fr': 'france',
-        'mexico': 'mexico', 'mx': 'mexico',
-        'italy': 'italy', 'it': 'italy',
-        # Add more mappings as needed
+        'united_states': 'united_states',
+        'us': 'united_states',
+        'uk': 'united_kingdom',
+        'united_kingdom': 'united_kingdom', 
+        'japan': 'japan',
+        'canada': 'canada',
+        'germany': 'germany',
+        'india': 'india',
+        'australia': 'australia',
+        'brazil': 'brazil',
+        'france': 'france',
+        'mexico': 'mexico',
+        'italy': 'italy'
     }
-
-    # Normalize country input using the mapping
-    normalized_pn = known_countries.get(pn.lower().replace('_', ' '), pn) # Default to original if not found
-
+    
+    # Use known country format if available
+    country = known_countries.get(pn.lower(), pn).upper()
+    
+    # Initialize PyTrends with backoff factor to handle rate limiting
+    pytrends = TrendReq(hl=hl, tz=tz, timeout=(10,25), retries=2, backoff_factor=0.5)
+    
+    # Try getting data with the primary format
     try:
-        # Initialize PyTrends with backoff factor to handle rate limiting
-        pytrends = TrendReq(hl=hl, tz=tz, timeout=(10, 25), retries=2, backoff_factor=0.5)
-
-        logger.debug(f"Requesting trending_searches with pn='{normalized_pn}'")
-        df = pytrends.trending_searches(pn=normalized_pn)
-
-        # Process the result (can be Series or DataFrame)
+        df = pytrends.trending_searches(pn=country)
+        
+        # Handle different result formats
         if isinstance(df, pd.Series):
             result = df.tolist()
-        elif isinstance(df, pd.DataFrame) and not df.empty:
-            # Assuming the first column contains the trends if it's a DataFrame
-            result = df.iloc[:, 0].tolist()
-        elif isinstance(df, pd.DataFrame) and df.empty:
-            logger.warning(f"Received empty DataFrame for trending searches for '{normalized_pn}'.")
-            result = []
+            return {
+                "pn": pn,
+                "data": [{"query": item} for item in result]
+            }
+        elif isinstance(df, pd.DataFrame):
+            if len(df.columns) == 1 and not df.empty:
+                result = df[df.columns[0]].tolist()
+                return {
+                    "pn": pn,
+                    "data": [{"query": item} for item in result]
+                }
+            else:
+                return {
+                    "pn": pn,
+                    "data": df.to_dict('records')
+                }
         else:
-            logger.warning(f"Unexpected data type received from trending_searches: {type(df)}")
-            result = []
-
-        logger.info(f"Found {len(result)} trending searches for '{normalized_pn}'.")
-        return {
-            "pn_requested": pn,
-            "pn_used": normalized_pn,
-            "hl": hl,
-            "data": [{"query": item} for item in result]
-        }
-
+            return {
+                "pn": pn,
+                "data": [{"query": str(df)}]
+            }
+            
     except Exception as e:
-        logger.error(f"Failed to get trending searches for '{pn}' (used '{normalized_pn}'): {str(e)}", exc_info=True)
-        # Re-raise as a ValueError to be caught by the handler
-        raise ValueError(f"Failed to get trending searches for {pn}: {str(e)}")
+        # Try alternate format for certain countries
+        if country.lower() in ['us', 'uk', 'jp', 'ca', 'de', 'in', 'au']:
+            try:
+                df = pytrends.trending_searches(pn=country.upper())
+                
+                if isinstance(df, pd.Series):
+                    result = df.tolist()
+                    return {
+                        "pn": pn,
+                        "data": [{"query": item} for item in result]
+                    }
+                else:
+                    return {
+                        "pn": pn,
+                        "data": df.to_dict('records')
+                    }
+            except Exception as e2:
+                logger.error(f"Both formats failed: {str(e)} and {str(e2)}")
+                raise ValueError(f"Failed to get trending searches for {pn}: {str(e)}")
+        else:
+            raise ValueError(f"Failed to get trending searches for {pn}: {str(e)}")
 
 def get_realtime_trending_searches(pn='US', hl='en-US', tz=360, cat="all"):
-    """Get realtime trending searches for a given country using pytrends."""
-    logger.info(f"Getting realtime trending searches for country: {pn}, category: {cat}, lang: {hl}")
-
-    # Import dependencies only when needed
-    try:
-        from pytrends.request import TrendReq
-        import pandas as pd
-    except ImportError as e:
-        logger.error(f"Missing dependency for realtime trending searches: {e}")
-        raise ImportError(f"pytrends or pandas not installed. Cannot get realtime trends.")
-
-    # Realtime trends use 2-letter country codes primarily. Map common names.
+    """Get realtime trending searches for a given country"""
+    logger.info(f"Getting realtime trending searches for country: {pn}")
+    
+    # Import dependencies
+    from pytrends.request import TrendReq
+    from pytrends import dailydata
+    import pandas as pd
+    from datetime import datetime
+    
+    # Known working country codes
+    supported_countries = [
+        'AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'CO', 'CZ', 'DK',
+        'EG', 'FI', 'FR', 'DE', 'GR', 'HK', 'HU', 'IN', 'ID', 'IE',
+        'IL', 'IT', 'JP', 'KE', 'MY', 'MX', 'NL', 'NZ', 'NG', 'NO',
+        'PL', 'PT', 'PH', 'RO', 'RU', 'SA', 'SG', 'ZA', 'KR', 'ES',
+        'SE', 'CH', 'TW', 'TH', 'TR', 'UA', 'GB', 'US', 'VN'
+    ]
+    
+    # Convert country names to codes
     country_map = {
-        'united states': 'US', 'usa': 'US',
-        'united kingdom': 'GB', 'uk': 'GB',
-        'india': 'IN', 'brazil': 'BR', 'mexico': 'MX', 'france': 'FR',
-        'germany': 'DE', 'italy': 'IT', 'spain': 'ES', 'canada': 'CA',
-        'australia': 'AU', 'japan': 'JP',
-        # Add more as needed
+        'united_states': 'US',
+        'india': 'IN',
+        'brazil': 'BR',
+        'mexico': 'MX',
+        'united_kingdom': 'GB',
+        'france': 'FR',
+        'germany': 'DE',
+        'italy': 'IT',
+        'spain': 'ES',
+        'canada': 'CA',
+        'australia': 'AU',
+        'japan': 'JP'
     }
 
-    # Normalize country input to uppercase 2-letter code if possible
-    normalized_pn = country_map.get(pn.lower(), pn).upper()
-    logger.debug(f"Normalized country code for realtime trends: {normalized_pn}")
+    # Normalize country input
+    pn = country_map.get(pn.lower(), pn[:2].upper())
 
-    # Initialize PyTrends - consider disabling SSL verification if network issues persist
-    # requests_args={'verify': False} can sometimes help behind proxies/firewalls
-    try:
-        pytrends = TrendReq(
-            hl=hl,
-            tz=tz,
-            timeout=(10, 25),
-            retries=3,
-            backoff_factor=0.5,
-            # requests_args={'verify': False} # Uncomment if needed
-        )
-    except Exception as e:
-         logger.error(f"Failed to initialize PyTrends: {str(e)}", exc_info=True)
-         raise RuntimeError(f"PyTrends initialization failed: {str(e)}")
-
+    # Validate country code
+    if pn not in supported_countries:
+        raise ValueError(f"Invalid country code: {pn}. Supported countries: {', '.join(supported_countries)}")
+    
+    # Initialize PyTrends with basic parameters and SSL verification disabled
+    # This improves reliability for some connections
+    pytrends = TrendReq(
+        hl=hl,
+        tz=tz,
+        timeout=(10,25),
+        retries=3,
+        backoff_factor=0.5,
+        requests_args={'verify': False}
+    )
+    
     result = []
     try:
-        # Attempt realtime API
-        logger.debug(f"Requesting realtime_trending_searches with pn='{normalized_pn}', cat='{cat}'")
-        df = pytrends.realtime_trending_searches(pn=normalized_pn, cat=cat)
+        # Attempt realtime API first
+        df = pytrends.realtime_trending_searches(pn=pn)
         result = process_realtime_data(df)
-
-        if not result:
-            logger.warning(f"Realtime trending searches returned empty for {normalized_pn}. Trying fallback.")
-            raise ValueError("Empty realtime data, attempting fallback.") # Trigger fallback
-
+        
+        if not result:  # Fallback if empty response
+            raise ValueError("Empty realtime data")
+            
     except Exception as e:
-        logger.warning(f"Realtime trends API failed or returned empty for '{normalized_pn}': {str(e)}. Falling back to today's searches.")
-        # Fallback to today's searches (different endpoint, might have different data)
+        logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
+        # Fallback to daily trends
         try:
-            logger.debug(f"Attempting fallback: today_searches with pn='{normalized_pn}'")
-            # Today's searches might use full country name or code, try normalized code first
-            df_today = pytrends.today_searches(pn=normalized_pn)
-            result = process_daily_data(df_today) # Use a different processor if format differs
-            if not result:
-                 logger.warning(f"Fallback today_searches also returned empty for {normalized_pn}.")
-                 result = [{"note": f"Could not retrieve trending searches for {normalized_pn}. Both realtime and daily APIs returned no data."}]
-            else:
-                 logger.info(f"Successfully retrieved data using fallback today_searches for {normalized_pn}.")
-                 # Add a note indicating this is fallback data
-                 if isinstance(result, list) and result:
-                     result[0]['note'] = "Data retrieved using fallback (today_searches)"
-
+            df = dailydata.get_daily_trends(
+                geo=pn,
+                date=datetime.now().strftime('%Y%m%d'),
+                hl=hl
+            )
+            result = process_daily_data(df)
         except Exception as inner_e:
-            logger.error(f"Fallback today_searches also failed for '{normalized_pn}': {str(inner_e)}", exc_info=True)
-            result = [{"note": f"Could not retrieve trending searches for {normalized_pn}. Realtime API failed with '{str(e)}', and fallback failed with '{str(inner_e)}'."}]
+            logger.error(f"Daily trends also failed: {str(inner_e)}")
+            result = [{"note": "Could not retrieve trending searches"}]
 
     return {
-        "pn_requested": pn,
-        "pn_used": normalized_pn,
+        "pn": pn,
         "cat": cat,
-        "hl": hl,
         "data": result
     }
 
 def process_realtime_data(df):
-    """Clean and format realtime trending data from DataFrame."""
+    """Clean and format realtime data"""
     if df is None or df.empty:
-        logger.debug("process_realtime_data received empty or None DataFrame.")
         return []
-    try:
-        # Expected columns: 'title', 'entityNames'
-        required_cols = ['title', 'entityNames']
-        if not all(col in df.columns for col in required_cols):
-             logger.warning(f"Realtime data DataFrame missing expected columns. Found: {list(df.columns)}. Expected: {required_cols}")
-             # Adapt if structure is different, e.g., maybe just use first column if ['title', 'entityNames'] are missing
-             if 'title' in df.columns:
-                 return df[['title']].to_dict("records")
-             elif not df.empty: # Fallback to using the first column as title
-                 return df[[df.columns[0]]].rename(columns={df.columns[0]: 'title'}).to_dict("records")
-             return []
-
-        # Convert DataFrame rows to a list of dictionaries
-        records = df.to_dict("records")
-        processed = [
-            {
-                "title": item.get("title", ""),
-                "entities": item.get("entityNames", [])
-            }
-            for item in records
-        ]
-        logger.debug(f"Processed {len(processed)} realtime data records.")
-        return processed
-    except Exception as e:
-        logger.error(f"Error processing realtime DataFrame: {str(e)}", exc_info=True)
-        return []
-
+        
+    clean_result = []
+    for item in df.to_dict('records'):
+        clean_item = {
+            "title": item.get('title', ''),
+            "traffic": item.get('formattedTraffic', ''),
+            "image": item.get('image', {}).get('newsUrl', ''),
+            "articles": [
+                {"title": art.get('title', ''), "url": art.get('url', '')}
+                for art in item.get('articles', [])
+            ]
+        }
+        clean_result.append(clean_item)
+    return clean_result
 
 def process_daily_data(df):
-    """Clean and format daily trends data (often just a Series or single-column DataFrame)."""
-    if df is None:
-        logger.debug("process_daily_data received None input.")
+    """Clean and format daily trends data"""
+    if df is None or df.empty:
         return []
     try:
-        if isinstance(df, pd.Series):
-            result_list = df.tolist()
-        elif isinstance(df, pd.DataFrame):
-            if df.empty:
-                logger.debug("process_daily_data received empty DataFrame.")
-                return []
-            # Assume the first column holds the trending query
-            result_list = df.iloc[:, 0].tolist()
-        elif isinstance(df, list): # Already a list
-            result_list = df
-        else:
-            logger.warning(f"Unexpected data type in process_daily_data: {type(df)}")
-            return [] # Or try converting to string: [{"title": str(df)}]
-
-        processed = [{"title": title} for title in result_list if title] # Ensure title is not empty
-        logger.debug(f"Processed {len(processed)} daily data records.")
-        return processed
-    except Exception as e:
-        logger.error(f"Error processing daily data: {str(e)}", exc_info=True)
-        return []
-
+        return df[['title', 'traffic', 'related_queries']].to_dict('records')
+    except:
+        # Fallback if columns are different
+        return df.to_dict('records')
 
 def google_search(query, num_results=10, lang="en", proxy=None, advanced=False, sleep_interval=0, timeout=5):
-    """Perform a Google search using the googlesearch-python library."""
-    logger.info(f"Performing Google search for query: '{query}', num_results={num_results}, lang={lang}, advanced={advanced}")
-
-    # Import dependency only when needed
-    try:
-        # NOTE: googlesearch-python can be unreliable due to Google blocking scrapers.
-        # Consider using official APIs (like Google Custom Search JSON API) for production.
-        from googlesearch import search
-    except ImportError as e:
-        logger.error(f"Missing dependency for Google search: {e}")
-        raise ImportError(f"googlesearch-python not installed. Cannot perform search.")
-
+    """
+    Perform a Google search and return the results
+    
+    Parameters:
+    -----------
+    query : str
+        The search query
+    num_results : int
+        The number of results to return (default 10)
+    lang : str
+        The language code (default "en")
+    proxy : str
+        Optional proxy server (default None)
+    advanced : bool
+        Whether to return advanced search results with additional metadata (default False)
+    sleep_interval : int
+        Time to sleep between requests (default 0)
+    timeout : int
+        Timeout for requests in seconds (default 5)
+        
+    Returns:
+    --------
+    dict : Search results with metadata
+    """
+    logger.info(f"Performing Google search for query: {query}")
+    
+    # Import dependencies
+    from googlesearch import search
+    
     try:
         # Execute the search
-        search_results_generator = search(
-            query=query,
-            num_results=num_results,
-            lang=lang,
-            proxy=proxy,
-            advanced=advanced, # Returns dicts with title, url, description if True
-            sleep_interval=sleep_interval, # Be respectful of Google's servers
-            timeout=timeout
-        )
-
-        # Process results
-        results_list = []
-        count = 0
-        for result in search_results_generator:
-            if advanced:
-                # Result is expected to be an object with attributes
-                results_list.append({
-                    "title": getattr(result, 'title', 'N/A'),
-                    "url": getattr(result, 'url', 'N/A'),
-                    "description": getattr(result, 'description', 'N/A'),
-                    # 'rank' might not be consistently available depending on library version/Google's output
-                    # "rank": getattr(result, 'rank', None)
+        results = []
+        
+        if advanced:
+            # For advanced search, we get full result objects
+            search_results = search(
+                query,
+                num_results=num_results,
+                lang=lang, 
+                proxy=proxy,
+                advanced=True,
+                sleep_interval=sleep_interval,
+                timeout=timeout
+            )
+            
+            # Process advanced results
+            for result in search_results:
+                results.append({
+                    "title": result.title,
+                    "url": result.url,
+                    "description": result.description,
+                    "rank": result.rank
                 })
-            else:
-                # Result is expected to be just the URL string
-                results_list.append({"url": result}) # Wrap in dict for consistency
-            count += 1
-            # Optional: Break if we somehow get more results than requested (though library usually handles num_results)
-            # if count >= num_results:
-            #     break
-
-        logger.info(f"Google search returned {len(results_list)} results for '{query}'.")
+        else:
+            # For simple search, we just get URLs
+            search_results = search(
+                query,
+                num_results=num_results,
+                lang=lang,
+                proxy=proxy,
+                advanced=False,
+                sleep_interval=sleep_interval,
+                timeout=timeout
+            )
+            
+            # Convert to list if it's a generator
+            results = list(search_results)
+        
         return {
             "query": query,
-            "num_results_requested": num_results,
-            "num_results_returned": len(results_list),
+            "num_results": len(results),
             "lang": lang,
-            "advanced": advanced,
-            "results": results_list
+            "results": results
         }
-
+    
     except Exception as e:
-        # Specific handling for common googlesearch issues might be needed
-        # e.g., if it raises exceptions related to HTTP errors or parsing failures
-        logger.error(f"Error performing Google search for '{query}': {str(e)}", exc_info=True)
-        # Re-raise as ValueError for the handler
+        logger.error(f"Error performing Google search: {str(e)}")
         raise ValueError(f"Failed to perform Google search for '{query}': {str(e)}")
-
+        
 def search_and_analyze(query, num_results=10, include_trends=False, lang="en"):
-    """Perform Google search and optionally fetch trend data for the query."""
-    logger.info(f"Performing combined search and analysis for: '{query}', include_trends={include_trends}")
-
+    """
+    Perform a Google search and optionally get trend data for the query
+    
+    Parameters:
+    -----------
+    query : str
+        The search query
+    num_results : int
+        The number of results to return (default 10)
+    include_trends : bool
+        Whether to include trend data for the query (default False)
+    lang : str
+        The language code (default "en")
+    
+    Returns:
+    --------
+    dict : Combined search results and trend data
+    """
+    logger.info(f"Performing combined search and analysis for: {query}")
+    
     # Get search results
-    search_results_data = google_search(
+    search_results = google_search(
         query=query,
         num_results=num_results,
         lang=lang,
-        advanced=True # Use advanced for richer search result data
+        advanced=True
     )
-
+    
     response = {
         "query": query,
-        "search_metadata": {
-            "num_results_requested": search_results_data["num_results_requested"],
-            "num_results_returned": search_results_data["num_results_returned"],
-            "lang": search_results_data["lang"]
-        },
-        "search_results": search_results_data["results"],
-        "trend_data": None # Initialize trend data as None
+        "search_results": search_results["results"]
     }
-
+    
     # Optionally get trend data
     if include_trends:
-        logger.info(f"Fetching trend data for '{query}'...")
         try:
-            # Import dependencies only when needed
+            # Import dependencies
             from pytrends.request import TrendReq
             import pandas as pd
-
-            # Initialize PyTrends (use lang for hl)
-            # Map language code format if necessary, e.g., 'en' -> 'en-US'
-            hl_trends = f"{lang.lower()}-{lang.upper()}" if len(lang) == 2 else lang
-            pytrends = TrendReq(hl=hl_trends, tz=360, timeout=(10, 25), retries=2, backoff_factor=0.5)
-
-            # Build payload for the single query
-            pytrends.build_payload([query], timeframe='today 3-m') # Example timeframe
-
-            # 1. Interest Over Time
+            
+            # Initialize PyTrends
+            pytrends = TrendReq(hl=f"{lang}-{lang.upper()}", tz=360)
+            
+            # Build payload
+            pytrends.build_payload([query], timeframe='today 3-m')
+            
+            # Get interest over time
             interest_df = pytrends.interest_over_time()
-            if not interest_df.empty and query in interest_df.columns:
-                # Keep only the query's column and reset index
-                trend_interest = interest_df[[query]].reset_index().rename(columns={'date': 'date', query: 'interest'}).to_dict('records')
+            if not interest_df.empty:
+                trend_data = interest_df.reset_index().to_dict('records')
             else:
-                trend_interest = []
-
-            # 2. Related Queries
-            related_data_raw = pytrends.related_queries()
-            related_data = {"top": [], "rising": []}
-            if query in related_data_raw and related_data_raw[query]:
-                if related_data_raw[query].get('top') is not None:
-                    related_data["top"] = related_data_raw[query]['top'].to_dict('records')
-                if related_data_raw[query].get('rising') is not None:
-                    related_data["rising"] = related_data_raw[query]['rising'].to_dict('records')
-
+                trend_data = []
+                
+            # Get related queries
+            related = pytrends.related_queries()
+            related_data = {}
+            
+            if query in related and related[query]:
+                if related[query]['top'] is not None:
+                    related_data["top"] = related[query]['top'].to_dict('records')
+                else:
+                    related_data["top"] = []
+                    
+                if related[query]['rising'] is not None:
+                    related_data["rising"] = related[query]['rising'].to_dict('records')
+                else:
+                    related_data["rising"] = []
+            
             response["trend_data"] = {
-                "interest_over_time": trend_interest,
-                "related_queries": related_data,
-                "status": "success"
+                "interest_over_time": trend_data,
+                "related_queries": related_data
             }
-            logger.info(f"Successfully fetched trend data for '{query}'.")
-
-        except ImportError as e:
-             logger.error(f"Missing dependency for trend analysis: {e}")
-             response["trend_data"] = {"error": f"Missing dependency: {e}", "status": "error"}
+            
         except Exception as e:
-            logger.warning(f"Could not get trend data for '{query}': {str(e)}", exc_info=True)
-            response["trend_data"] = {"error": str(e), "status": "error"}
-
+            logger.warning(f"Could not get trend data: {str(e)}")
+            response["trend_data"] = {"error": str(e)}
+    
     return response
 
+def get_keyword_suggestions(keyword, num_results=10, lang="en", country="us"):
+    """
+    Get keyword suggestions from Google Autocomplete
+    
+    Parameters:
+    -----------
+    keyword : str
+        The base keyword to get suggestions for
+    num_results : int
+        Maximum number of suggestions to return (default 10)
+    lang : str
+        Language code (default "en")
+    country : str
+        Country code (default "us")
+    
+    Returns:
+    --------
+    dict : Suggestion results
+    """
+    logger.info(f"Getting keyword suggestions for: {keyword}")
+    
+    try:
+        # Import dependencies
+        import requests
+        import json
+        
+        # Use the Google Suggest API
+        url = "https://suggestqueries.google.com/complete/search"
+        params = {
+            "client": "firefox",  # Using firefox client for JSON response
+            "q": keyword,
+            "hl": lang,
+            "gl": country,
+            "ie": "UTF-8",
+            "oe": "UTF-8"
+        }
+        
+        # Make the request
+        response = requests.get(url, params=params, timeout=5)
+        
+        if response.status_code == 200:
+            # Parse suggestions from the response
+            data = json.loads(response.content.decode('utf-8'))
+            suggestions = data[1][:num_results]
+            
+            return {
+                "keyword": keyword,
+                "lang": lang,
+                "country": country,
+                "suggestions": suggestions
+            }
+        else:
+            logger.error(f"Error getting suggestions: {response.status_code}")
+            raise ValueError(f"Failed to get suggestions: HTTP {response.status_code}")
+            
+    except Exception as e:
+        logger.error(f"Error getting keyword suggestions: {str(e)}")
+        raise ValueError(f"Failed to get suggestions for '{keyword}': {str(e)}")
 
-def get_niche_topics(seed_keyword, depth=2, results_per_level=5, lang="en", country="us"):
-    """Explore niche topics related to a seed keyword using suggestions."""
-    logger.info(f"Generating niche topics for: '{seed_keyword}', depth={depth}, results={results_per_level}")
-
-    # Basic validation
-    depth = max(1, min(depth, 3)) # Limit depth to prevent excessive recursion/calls
-    results_per_level = max(1, min(results_per_level, 10)) # Limit results per level
-
-    # Use a dictionary to store the tree structure
-    topic_tree = {"keyword": seed_keyword, "subtopics": []}
-    # Use a queue for breadth-first exploration: (keyword, current_depth, parent_node_list)
+def get_niche_topics(seed_keyword, depth=2, results_per_level=5, lang="en"):
+    """
+    Generate a hierarchical list of niche topics related to a seed keyword
+    using search and suggestions
+    
+    Parameters:
+    -----------
+    seed_keyword : str
+        The main topic to explore
+    depth : int
+        How many levels deep to explore (default 2)
+    results_per_level : int
+        How many results to include per level (default 5)
+    lang : str
+        Language code (default "en")
+    
+    Returns:
+    --------
+    dict : Hierarchical topic tree
+    """
+    logger.info(f"Generating niche topics for: {seed_keyword}, depth={depth}")
+    
+    # Import dependencies
+    import time
+    
+    # Start with the seed keyword as the root topic
+    topic_tree = {
+        "keyword": seed_keyword,
+        "subtopics": []
+    }
+    
+    # Queue to process, with (keyword, current_depth, parent) tuples
     processing_queue = [(seed_keyword, 0, topic_tree["subtopics"])]
-    # Keep track of processed keywords to avoid cycles (optional, but good practice)
-    processed_keywords = {seed_keyword}
-
+    
+    # Process the queue
     while processing_queue:
-        current_keyword, current_depth, parent_subtopic_list = processing_queue.pop(0)
-
-        # Stop if max depth is reached
+        current_keyword, current_depth, parent_list = processing_queue.pop(0)
+        
+        # Skip if we've reached max depth
         if current_depth >= depth:
             continue
-
-        logger.debug(f"Exploring depth {current_depth + 1} for keyword: '{current_keyword}'")
-
+            
         try:
             # Get suggestions for the current keyword
-            suggestions = get_google_suggestions(
-                current_keyword,
-                num_suggestions=results_per_level,
-                language=lang,
-                region=country
+            suggestions_result = get_keyword_suggestions(
+                current_keyword, 
+                num_results=results_per_level,
+                lang=lang
             )
-
-            # Process valid suggestions
-            for suggestion in suggestions:
-                if suggestion and suggestion not in processed_keywords:
-                    # Create a new node for the suggestion
-                    subtopic_node = {
-                        "keyword": suggestion,
-                        "subtopics": []
-                    }
-                    parent_subtopic_list.append(subtopic_node)
-                    processed_keywords.add(suggestion)
-
-                    # Add this suggestion to the queue for the next level exploration
-                    processing_queue.append((suggestion, current_depth + 1, subtopic_node["subtopics"]))
-
-            # Add a small delay to be respectful to the suggestion API
-            time.sleep(0.2) # Adjust as needed
-
+            
+            # Create a node for each suggestion
+            for suggestion in suggestions_result["suggestions"]:
+                subtopic = {
+                    "keyword": suggestion,
+                    "subtopics": []
+                }
+                parent_list.append(subtopic)
+                
+                # Add to queue for next level processing
+                if current_depth < depth - 1:
+                    processing_queue.append((suggestion, current_depth + 1, subtopic["subtopics"]))
+            
+            # Add a small delay to avoid rate limiting
+            time.sleep(0.5)
+                
         except Exception as e:
-            # Log error for this specific keyword but continue exploring others
-            logger.warning(f"Error getting suggestions for '{current_keyword}' at depth {current_depth}: {str(e)}")
-            continue # Skip adding subtopics for this errored keyword
-
-    logger.info(f"Finished generating niche topics for '{seed_keyword}'.")
+            logger.warning(f"Error exploring '{current_keyword}': {str(e)}")
+            continue
+    
     return topic_tree
 
-
-# --- HTTP Request Handler ---
-
 class Handler(http.server.SimpleHTTPRequestHandler):
-    """Handles incoming HTTP GET requests."""
-
-    def _send_response(self, status_code, content_type, response_body):
-        """Helper to send standardized JSON responses."""
-        self.send_response(status_code)
-        self.send_header('Content-Type', content_type)
-        # Consider adding CORS headers if accessed from a different domain browser
-        # self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        if isinstance(response_body, (dict, list)):
-            response_bytes = json.dumps(response_body, default=str).encode('utf-8') # Use default=str for non-serializable types like datetime
-        elif isinstance(response_body, str):
-            response_bytes = response_body.encode('utf-8')
-        else:
-             response_bytes = str(response_body).encode('utf-8')
-        self.wfile.write(response_bytes)
-
-    def _send_error_response(self, status_code, message, error_details=None):
-        """Helper to send standardized JSON error responses."""
-        error_body = {"status": "error", "message": message}
-        if error_details:
-             if isinstance(error_details, Exception):
-                 error_body["details"] = f"{type(error_details).__name__}: {str(error_details)}"
-             else:
-                 error_body["details"] = str(error_details)
-        logger.error(f"Sending error response {status_code}: {message} {error_body.get('details', '')}")
-        self._send_response(status_code, 'application/json', error_body)
-
     def do_GET(self):
-        """Handle GET requests."""
-        start_time = time.time()
+        if not rate_limiter.is_allowed():
+            self.send_error(429, "Too Many Requests")
+            return
+        
+        rate_limiter.add_call()
+
         # Parse the URL
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         query_string = parsed_url.query
-        query_params = urllib.parse.parse_qs(query_string) # Returns dict with list values
+        query = urllib.parse.parse_qs(query_string)
+        
+        logger.info(f"Received request for path: {path}")
 
-        logger.info(f"Received GET request for path: {path} with params: {query_params}")
-
-        # --- Health Check Endpoint (BEFORE Rate Limiter) ---
+        # Health check endpoint
         if path == '/health' or path == '/':
-            logger.info("Handling health check request.")
-            health_response = {
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
                 "status": "healthy",
-                "time": datetime.now().isoformat(),
-                "version": "1.1", # Example version
-                "rate_limit_status": {
-                     "max_calls": rate_limiter.max_calls,
-                     "time_frame_seconds": rate_limiter.time_frame,
-                     "current_calls_in_window": len(rate_limiter.calls)
-                }
-                # List only key, stable endpoints here
-                # "available_endpoints": [ "/health", "/search", "/autocomplete", "/trends/..." ]
+                "time": str(datetime.now()),
+                "version": "1.0",
+                "endpoints": [
+                    "/health",
+                    "/search",
+                    "/search/combined",
+                    "/autocomplete",
+                    "/trends",
+                    "/trends/interest-over-time",
+                    "/trends/multirange-interest-over-time",
+                    "/trends/historical-hourly-interest",
+                    "/trends/interest-by-region",
+                    "/trends/related-topics",
+                    "/trends/related-queries",
+                    "/trends/trending-searches",
+                    "/trends/realtime-trending-searches",
+                    "/trends/top-charts",
+                    "/trends/suggestions",
+                    "/trends/categories",
+                    "/niche-topics"
+                ]
             }
-            self._send_response(200, 'application/json', health_response)
-            duration = time.time() - start_time
-            logger.info(f"Health check completed in {duration:.4f} seconds.")
-            return # Exit early, do not apply rate limiting to health checks
-
-        # --- Apply Rate Limiter for all other endpoints ---
-        if not rate_limiter.is_allowed():
-            self._send_error_response(429, "Too Many Requests")
-            duration = time.time() - start_time
-            logger.warning(f"Request denied due to rate limiting for {path}. Duration: {duration:.4f}s")
+            self.wfile.write(json.dumps(response).encode())
             return
-        else:
-            # Record the call only if it's allowed and not a health check
-            rate_limiter.add_call()
-            logger.debug(f"Rate limit check passed. Current calls: {len(rate_limiter.calls)}")
 
+        # Google Search endpoints
+        elif path == '/search':
+            self.handle_google_search(query)
+            return
+        elif path == '/search/combined':
+            self.handle_combined_search(query)
+            return
+        elif path == '/niche-topics':
+            self.handle_niche_topics(query)
+            return
 
-        # --- Route to specific handlers ---
-        try:
-            if path == '/search':
-                self.handle_google_search(query_params)
-            elif path == '/search/combined':
-                self.handle_combined_search(query_params)
-            elif path == '/niche-topics':
-                self.handle_niche_topics(query_params)
-            elif path == '/autocomplete':
-                self.handle_autocomplete(query_params)
-            elif path == '/trends': # Legacy/Simplified Trends Endpoint
-                self.handle_trends_legacy(query_params) # Keep distinct from new ones
-            elif path.startswith('/trends/'):
-                self.handle_trends_endpoints(path, query_params)
+        # Google Autocomplete endpoint
+        elif path == '/autocomplete':
+            self.handle_autocomplete(query)
+            return
+
+        # Original trends endpoint (backward compatibility)
+        elif path == '/trends':
+            self.handle_trends(query)
+            return
+
+        # New trend endpoints
+        elif path.startswith('/trends/'):
+            endpoint = path[8:]  # Remove '/trends/' prefix
+            
+            if endpoint == 'interest-over-time':
+                self.handle_interest_over_time(query)
+            elif endpoint == 'multirange-interest-over-time':
+                self.handle_multirange_interest_over_time(query)
+            elif endpoint == 'historical-hourly-interest':
+                self.handle_historical_hourly_interest(query)
+            elif endpoint == 'interest-by-region':
+                self.handle_interest_by_region(query)
+            elif endpoint == 'related-topics':
+                self.handle_related_topics(query)
+            elif endpoint == 'related-queries':
+                self.handle_related_queries(query)
+            elif endpoint == 'trending-searches':
+                self.handle_trending_searches(query)
+            elif endpoint == 'realtime-trending-searches':
+                self.handle_realtime_trending_searches(query)
+            elif endpoint == 'top-charts':
+                self.handle_top_charts(query)
+            elif endpoint == 'suggestions':
+                self.handle_suggestions(query)
+            elif endpoint == 'categories':
+                self.handle_categories(query)
             else:
-                self._send_error_response(404, "Endpoint not found")
+                self.handle_not_implemented()
+            return
 
-        except ImportError as e:
-             # Handle missing dependencies specifically
-             self._send_error_response(501, f"Feature unavailable due to missing dependency: {e}", e)
-        except ValueError as e:
-             # Handle bad requests / validation errors
-             self._send_error_response(400, f"Bad Request: {e}", e)
-        except Exception as e:
-            # Catch-all for unexpected server errors
-            logger.error(f"Unhandled exception processing request for {path}: {str(e)}", exc_info=True)
-            self._send_error_response(500, "Internal Server Error", e)
-        finally:
-            duration = time.time() - start_time
-            logger.info(f"Request for {path} processed in {duration:.4f} seconds.")
-
-
-    # --- Endpoint Handlers ---
+        # Default response for unimplemented endpoints
+        else:
+            self.handle_not_implemented()
+            return
 
     def handle_autocomplete(self, query):
-        """Handle /autocomplete endpoint."""
-        logger.info("Handling autocomplete request...")
-        keyword = query.get('keyword', [''])[0]
-        num = int(query.get('num', ['10'])[0])
-        language = query.get('language', ['en'])[0]
-        region = query.get('region', ['us'])[0]
+        """Handle Google autocomplete request"""
+        try:
+            # Get parameters
+            keyword = query.get('keyword', [''])[0]
+            num = int(query.get('num', ['10'])[0])
+            language = query.get('language', ['en'])[0]
+            region = query.get('region', ['us'])[0]
 
-        if not keyword:
-            raise ValueError("Required parameter 'keyword' is missing.")
+            if not keyword:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Keyword parameter is required"}).encode())
+                return
 
-        suggestions = get_google_suggestions(keyword, num, language, region)
-        response_body = {
-            "keyword": keyword, "language": language, "region": region,
-            "num_requested": num, "num_returned": len(suggestions),
-            "suggestions": suggestions
-        }
-        self._send_response(200, 'application/json', response_body)
+            logger.info(f"Autocomplete request for keyword: {keyword}, language: {language}, region: {region}")
+
+            # Get the suggestions
+            suggestions = get_google_suggestions(keyword, num, language, region)
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keyword": keyword,
+                "language": language,
+                "region": region,
+                "suggestions": suggestions
+            }
+            self.wfile.write(json.dumps(response).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing autocomplete request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
 
     def handle_google_search(self, query):
-        """Handle /search endpoint."""
-        logger.info("Handling Google search request...")
-        search_query = query.get('q', [''])[0]
-        num_results = int(query.get('num', ['10'])[0])
-        lang = query.get('lang', ['en'])[0]
-        advanced = query.get('advanced', ['false'])[0].lower() == 'true'
-        sleep_interval = int(query.get('sleep', ['0'])[0]) # Use with caution
-        timeout = int(query.get('timeout', ['5'])[0])
+        """Handle Google search endpoint"""
+        try:
+            # Get parameters
+            search_query = query.get('q', [''])[0]
+            num_results = int(query.get('num', ['10'])[0])
+            lang = query.get('lang', ['en'])[0]
+            advanced = query.get('advanced', ['false'])[0].lower() == 'true'
+            sleep_interval = int(query.get('sleep', ['0'])[0])
+            timeout = int(query.get('timeout', ['5'])[0])
 
-        if not search_query:
-            raise ValueError("Required parameter 'q' (search query) is missing.")
+            if not search_query:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_response = {"error": "Search query (q) parameter is required"}
+                self.wfile.write(json.dumps(error_response).encode())
+                return
 
-        # Call the core search function (handles its own errors/imports)
-        result = google_search(
-            query=search_query, num_results=num_results, lang=lang,
-            advanced=advanced, sleep_interval=sleep_interval, timeout=timeout
-        )
-        self._send_response(200, 'application/json', result)
+            logger.info(f"Google search request: q={search_query}, num={num_results}, lang={lang}")
 
+            # Use the google_search function from CLI
+            try:
+                result = google_search(
+                    query=search_query,
+                    num_results=num_results,
+                    lang=lang,
+                    advanced=advanced,
+                    sleep_interval=sleep_interval,
+                    timeout=timeout
+                )
+                
+                # Send response
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result, default=str).encode())
+
+            except Exception as search_error:
+                logger.error(f"Search execution error: {str(search_error)}")
+                raise search_error
+
+        except Exception as e:
+            logger.error(f"Error processing Google search request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
 
     def handle_combined_search(self, query):
-        """Handle /search/combined endpoint."""
-        logger.info("Handling combined search and analysis request...")
-        search_query = query.get('q', [''])[0]
-        num_results = int(query.get('num', ['10'])[0])
-        include_trends = query.get('include_trends', ['false'])[0].lower() == 'true'
-        lang = query.get('lang', ['en'])[0]
+        """Handle combined search and trends analysis endpoint"""
+        try:
+            # Get parameters
+            search_query = query.get('q', [''])[0]
+            num_results = int(query.get('num', ['10'])[0])
+            include_trends = query.get('include_trends', ['false'])[0].lower() == 'true'
+            lang = query.get('lang', ['en'])[0]
 
-        if not search_query:
-            raise ValueError("Required parameter 'q' (search query) is missing.")
+            if not search_query:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_response = {"error": "Search query (q) parameter is required"}
+                self.wfile.write(json.dumps(error_response).encode())
+                return
 
-        result = search_and_analyze(
-            query=search_query, num_results=num_results,
-            include_trends=include_trends, lang=lang
-        )
-        self._send_response(200, 'application/json', result)
+            logger.info(f"Combined search request: q={search_query}, include_trends={include_trends}")
 
+            # Use the search_and_analyze function from CLI
+            result = search_and_analyze(
+                query=search_query,
+                num_results=num_results,
+                include_trends=include_trends,
+                lang=lang
+            )
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(result, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing combined search request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
 
     def handle_niche_topics(self, query):
-        """Handle /niche-topics endpoint."""
-        logger.info("Handling niche topics request...")
-        seed_keyword = query.get('keyword', [''])[0]
-        depth = int(query.get('depth', ['2'])[0])
-        results_per_level = int(query.get('results_per_level', ['5'])[0])
-        lang = query.get('lang', ['en'])[0]
-        country = query.get('country', ['us'])[0]
-
-        if not seed_keyword:
-            raise ValueError("Required parameter 'keyword' is missing.")
-
-        # Validate parameters (optional, function also does it)
-        depth = max(1, min(depth, 3))
-        results_per_level = max(1, min(results_per_level, 10))
-
-        topic_tree = get_niche_topics(
-            seed_keyword=seed_keyword, depth=depth,
-            results_per_level=results_per_level, lang=lang, country=country
-        )
-        response = {
-            "seed_keyword": seed_keyword, "depth": depth, "results_per_level": results_per_level,
-            "lang": lang, "country": country, "topic_tree": topic_tree
-        }
-        self._send_response(200, 'application/json', response)
-
-
-    def handle_trends_legacy(self, query):
-        """Handle /trends (legacy) endpoint - maps to interest_over_time or related_queries."""
-        logger.warning("Handling legacy /trends request. Consider using specific /trends/* endpoints.")
-        keywords = query.get('keywords', ['bitcoin'])[0].split(',')
-        timeframe = query.get('timeframe', ['today 3-m'])[0]
-        query_type = query.get('query_type', ['interest_over_time'])[0].lower()
-        geo = query.get('geo', [''])[0]
-        hl = query.get('hl', ['en-US'])[0]
-        tz = int(query.get('tz', ['360'])[0])
-        cat = int(query.get('cat', ['0'])[0])
-
-        if not keywords:
-            raise ValueError("Required parameter 'keywords' is missing.")
-
+        """Handle niche topics discovery endpoint"""
         try:
-            from pytrends.request import TrendReq
-            import pandas as pd
-        except ImportError as e:
-            raise ImportError(f"pytrends or pandas not installed. Cannot use legacy /trends.")
+            # Get parameters
+            seed_keyword = query.get('keyword', [''])[0]
+            depth = int(query.get('depth', ['2'])[0])
+            results_per_level = int(query.get('results_per_level', ['5'])[0])
+            lang = query.get('lang', ['en'])[0]
 
-        pytrends = TrendReq(hl=hl, tz=tz, timeout=(10, 25), retries=2, backoff_factor=0.5)
-        pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+            if not seed_keyword:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_response = {"error": "Keyword parameter is required"}
+                self.wfile.write(json.dumps(error_response).encode())
+                return
 
-        data = {}
-        if query_type == 'interest_over_time':
-            df = pytrends.interest_over_time()
-            data = df.reset_index().to_dict('records') if not df.empty else []
-        elif query_type == 'related_queries':
-            raw_data = pytrends.related_queries()
-            data = {}
-            for kw in keywords:
-                 if kw in raw_data and raw_data[kw]:
-                     data[kw] = {
-                         "top": raw_data[kw].get("top").to_dict('records') if raw_data[kw].get("top") is not None else [],
-                         "rising": raw_data[kw].get("rising").to_dict('records') if raw_data[kw].get("rising") is not None else []
-                     }
-                 else:
-                     data[kw] = {"top": [], "rising": []}
-        elif query_type == 'interest_by_region':
-             resolution = query.get('resolution', ['COUNTRY'])[0]
-             df = pytrends.interest_by_region(resolution=resolution)
-             data = df.reset_index().to_dict('records') if not df.empty else []
-        else:
-            raise ValueError(f"Unsupported legacy 'query_type': {query_type}. Supported: interest_over_time, related_queries, interest_by_region.")
+            # Validate parameters
+            if depth > 3:
+                depth = 3  # Limit depth to avoid excessive requests
+            if results_per_level > 10:
+                results_per_level = 10  # Limit results to avoid excessive requests
 
-        response_body = {
-            "keywords": keywords, "timeframe": timeframe, "geo": geo,
-            "query_type": query_type, "data": data, "note": "Legacy endpoint"
-        }
-        self._send_response(200, 'application/json', response_body)
+            logger.info(f"Niche topics request: keyword={seed_keyword}, depth={depth}, results_per_level={results_per_level}")
 
+            # Use the get_niche_topics function from CLI
+            topic_tree = get_niche_topics(
+                seed_keyword=seed_keyword,
+                depth=depth,
+                results_per_level=results_per_level,
+                lang=lang
+            )
 
-    def handle_trends_endpoints(self, path, query):
-        """Router for specific /trends/* endpoints."""
-        endpoint = path[len('/trends/'):] # Get part after /trends/
-        logger.info(f"Handling trends endpoint: {endpoint}")
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "seed_keyword": seed_keyword,
+                "depth": depth,
+                "results_per_level": results_per_level,
+                "lang": lang,
+                "topic_tree": topic_tree
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
 
-        # Centralized parameter extraction
-        keywords = query.get('keywords', [''])[0].split(',') if query.get('keywords') else []
-        timeframe = query.get('timeframe', ['today 3-m'])[0]
-        geo = query.get('geo', [''])[0]
-        hl = query.get('hl', ['en-US'])[0]
-        tz = int(query.get('tz', ['360'])[0])
-        cat = int(query.get('cat', ['0'])[0])
-        pn = query.get('pn', ['US'])[0]       # For country-specific trends
-        date = query.get('date', [str(datetime.now().year - 1)])[0] # For top charts, default last year
-
-         # Import dependencies here for all trends functions
-        try:
-            from pytrends.request import TrendReq
-            import pandas as pd
-        except ImportError as e:
-            raise ImportError(f"pytrends or pandas not installed. Cannot use /trends/ endpoints.")
-
-        # Initialize PyTrends (can be reused)
-        # Add custom user agent header - sometimes helps avoid blocking
-        custom_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        pytrends = TrendReq(hl=hl, tz=tz, timeout=(10, 25), retries=2, backoff_factor=0.5, requests_args={'headers': custom_headers})
-
-        result = {}
-        response_meta = {"hl": hl, "tz": tz} # Basic metadata for response
-
-
-        # --- Route based on specific endpoint ---
-        if endpoint == 'interest-over-time':
-            if not keywords or keywords == ['']: raise ValueError("Parameter 'keywords' is required.")
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            df = pytrends.interest_over_time()
-            result = df.reset_index().to_dict('records') if not df.empty else []
-            response_meta.update({"keywords": keywords, "timeframe": timeframe, "geo": geo, "cat": cat})
-
-        elif endpoint == 'interest-by-region':
-             if not keywords or keywords == ['']: raise ValueError("Parameter 'keywords' is required.")
-             resolution = query.get('resolution', ['COUNTRY'])[0].upper()
-             if resolution not in ['COUNTRY', 'REGION', 'CITY', 'DMA']: raise ValueError("Invalid 'resolution'. Use COUNTRY, REGION, CITY, or DMA.")
-             inc_low_vol = query.get('inc_low_vol', ['true'])[0].lower() == 'true'
-             inc_geo_code = query.get('inc_geo_code', ['false'])[0].lower() == 'true'
-             pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-             df = pytrends.interest_by_region(resolution=resolution, inc_low_vol=inc_low_vol, inc_geo_code=inc_geo_code)
-             result = df.reset_index().to_dict('records') if not df.empty else []
-             response_meta.update({"keywords": keywords, "timeframe": timeframe, "geo": geo, "cat": cat, "resolution": resolution})
-
-        elif endpoint == 'related-topics':
-            if not keywords or keywords == ['']: raise ValueError("Parameter 'keywords' is required.")
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            raw_data = pytrends.related_topics()
-            result = {}
-            for kw in keywords:
-                 if kw in raw_data and raw_data[kw]:
-                     result[kw] = {
-                         "top": raw_data[kw].get("top").to_dict('records') if raw_data[kw].get("top") is not None else [],
-                         "rising": raw_data[kw].get("rising").to_dict('records') if raw_data[kw].get("rising") is not None else []
-                     }
-                 else:
-                     result[kw] = {"top": [], "rising": []}
-            response_meta.update({"keywords": keywords, "timeframe": timeframe, "geo": geo, "cat": cat})
-
-        elif endpoint == 'related-queries':
-            if not keywords or keywords == ['']: raise ValueError("Parameter 'keywords' is required.")
-            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
-            raw_data = pytrends.related_queries()
-            result = {}
-            for kw in keywords:
-                 if kw in raw_data and raw_data[kw]:
-                     result[kw] = {
-                         "top": raw_data[kw].get("top").to_dict('records') if raw_data[kw].get("top") is not None else [],
-                         "rising": raw_data[kw].get("rising").to_dict('records') if raw_data[kw].get("rising") is not None else []
-                     }
-                 else:
-                     result[kw] = {"top": [], "rising": []}
-            response_meta.update({"keywords": keywords, "timeframe": timeframe, "geo": geo, "cat": cat})
-
-        elif endpoint == 'trending-searches':
-            # Use the dedicated function which handles country normalization
-            result_data = get_trending_searches(pn=pn, hl=hl, tz=tz) # Catches errors internally
-            result = result_data['data']
-            response_meta.update({"pn_requested": pn, "pn_used": result_data['pn_used']})
-
-        elif endpoint == 'realtime-trending-searches':
-            cat_realtime = query.get('cat', ['all'])[0]
-            # Use the dedicated function which handles country normalization and fallback
-            result_data = get_realtime_trending_searches(pn=pn, hl=hl, tz=tz, cat=cat_realtime) # Catches errors internally
-            result = result_data['data']
-            response_meta.update({"pn_requested": pn, "pn_used": result_data['pn_used'], "cat": cat_realtime})
-
-        elif endpoint == 'top-charts':
-            try:
-                date_int = int(date)
-            except ValueError:
-                 raise ValueError("Parameter 'date' must be a valid year (integer).")
-            df = pytrends.top_charts(date_int, hl=hl, tz=tz, geo=geo)
-            result = df.to_dict('records') if not df.empty else []
-            response_meta.update({"year": date_int, "geo": geo})
-
-        elif endpoint == 'suggestions':
-            keyword = query.get('keyword', [''])[0]
-            if not keyword: raise ValueError("Parameter 'keyword' is required.")
-            suggestions_list = pytrends.suggestions(keyword=keyword)
-            # Format suggestions to be consistent with get_google_suggestions
-            result = [{"title": sugg['title'], "type": sugg['type']} for sugg in suggestions_list]
-            response_meta.update({"keyword": keyword})
-
-        elif endpoint == 'categories':
-            categories_dict = pytrends.categories()
-            result = categories_dict # Already a dictionary
-            response_meta.update({}) # No specific params other than hl/tz
-
-        # elif endpoint == 'historical-hourly-interest': # Requires careful date handling
-        #     # ... implementation needed, parsing year/month/day start/end ...
-        #     raise NotImplementedError("Endpoint '/trends/historical-hourly-interest' not fully implemented yet.")
-
-        # elif endpoint == 'multirange-interest-over-time': # Requires multiple calls
-        #     # ... implementation needed, parsing timeframes ...
-        #     raise NotImplementedError("Endpoint '/trends/multirange-interest-over-time' not fully implemented yet.")
-
-        else:
-            raise ValueError(f"Unknown /trends/ endpoint: {endpoint}")
-
-
-        # Send successful response
-        response_body = {
-            "endpoint": f"/trends/{endpoint}",
-            "metadata": response_meta,
-            "data": result,
-            "status": "success"
-        }
-        self._send_response(200, 'application/json', response_body)
-
-# --- Server Startup and Shutdown ---
-
-# Global variable to hold the server instance for shutdown
-httpd = None
-
-def shutdown_server(signum, frame):
-    """Gracefully shutdown the server."""
-    logger.info(f"Received signal {signum}. Shutting down server...")
-    if httpd:
-        try:
-            httpd.shutdown()  # Stop accepting new requests
-            httpd.server_close() # Close the socket
-            logger.info("Server successfully shut down.")
         except Exception as e:
-             logger.error(f"Error during server shutdown: {e}", exc_info=True)
-    sys.exit(0)
+            logger.error(f"Error processing niche topics request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
 
-if __name__ == "__main__":
-    # Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, shutdown_server)  # Handle Ctrl+C
-    signal.signal(signal.SIGTERM, shutdown_server) # Handle kill/system shutdown
+    def handle_not_implemented(self):
+        """Handle not implemented endpoints"""
+        self.send_response(501)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({
+            "status": "error",
+            "message": "Endpoint not implemented yet",
+            "available_endpoints": [
+                "/health",
+                "/search?q=bitcoin&num=10&advanced=true",
+                "/search/combined?q=bitcoin&include_trends=true",
+                "/autocomplete?keyword=bitcoin&language=en&region=us",
+                "/niche-topics?keyword=bitcoin&depth=2&results_per_level=5",
+                "/trends?keywords=keyword1,keyword2",
+                "/trends/interest-over-time?keywords=keyword1,keyword2",
+                "/trends/multirange-interest-over-time?keywords=keyword1,keyword2&timeframes=2022-01-01 2022-01-31|2022-03-01 2022-03-31",
+                "/trends/historical-hourly-interest?keywords=keyword1,keyword2&year_start=2022&month_start=1&day_start=1&year_end=2022&month_end=1&day_end=7",
+                "/trends/interest-by-region?keywords=keyword1,keyword2&resolution=COUNTRY",
+                "/trends/related-topics?keywords=keyword1,keyword2",
+                "/trends/related-queries?keywords=keyword1,keyword2",
+                "/trends/trending-searches?pn=united_states",
+                "/trends/realtime-trending-searches?pn=US",
+                "/trends/top-charts?date=2022&geo=GLOBAL",
+                "/trends/suggestions?keyword=bitcoin",
+                "/trends/categories"
+            ]
+        }).encode())
 
-    logger.info(f"Starting HTTP server on 0.0.0.0:{PORT}")
-    logger.info("Available core endpoints:")
-    logger.info(f"  GET /health                       - Server status (bypasses rate limit)")
-    logger.info(f"  GET /search?q=...               - Google Search results")
-    logger.info(f"  GET /autocomplete?keyword=...     - Google Autocomplete suggestions")
-    logger.info(f"  GET /search/combined?q=...      - Search + Trend Analysis")
-    logger.info(f"  GET /niche-topics?keyword=...   - Explore related topics")
-    logger.info("Available /trends/ endpoints (use pytrends):")
-    logger.info(f"  GET /trends/interest-over-time?keywords=...")
-    logger.info(f"  GET /trends/interest-by-region?keywords=...")
-    logger.info(f"  GET /trends/related-topics?keywords=...")
-    logger.info(f"  GET /trends/related-queries?keywords=...")
-    logger.info(f"  GET /trends/trending-searches?pn=...")
-    logger.info(f"  GET /trends/realtime-trending-searches?pn=...")
-    logger.info(f"  GET /trends/top-charts?date=YYYY&geo=...")
-    logger.info(f"  GET /trends/suggestions?keyword=...")
-    logger.info(f"  GET /trends/categories")
-    logger.info(f"Rate limit: {MAX_CALLS_PER_MINUTE} calls per {RATE_LIMIT_TIMEFRAME} seconds (excluding /health)")
+    def handle_trends(self, query):
+        """Handle legacy trends endpoint - for backward compatibility"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframe = query.get('timeframe', ['today 3-m'])[0]
+            query_type = query.get('query_type', ['interest_over_time'])[0]
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
 
-    try:
-        # Allow address reuse immediately after server stops
-        socketserver.TCPServer.allow_reuse_address = True
-        httpd = socketserver.TCPServer(("0.0.0.0", PORT), Handler)
-        logger.info(f"Server listening on 0.0.0.0:{PORT}. Press Ctrl+C to stop.")
-        httpd.serve_forever()
-    except OSError as e:
-        logger.error(f"Could not bind to port {PORT}: {e}. Is the port already in use?")
-    except Exception as e:
-        logger.error(f"Critical error starting or running server: {e}", exc_info=True)
-    finally:
-        if httpd:
-            httpd.server_close() # Ensure socket is closed on unexpected exit
-            logger.info("Server socket closed.")
+            logger.info(f"Trends request: keywords={keywords}, timeframe={timeframe}, type={query_type}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+
+            # Get data based on query type
+            if query_type == 'interest_over_time':
+                data = pytrends.interest_over_time()
+                result = data.reset_index().to_dict('records') if not data.empty else []
+            elif query_type == 'related_queries':
+                data = pytrends.related_queries()
+                result = {}
+                for kw in keywords:
+                    if kw in data and data[kw]:
+                        result[kw] = {
+                            "top": data[kw]["top"].to_dict('records') if data[kw]["top"] is not None else [],
+                            "rising": data[kw]["rising"].to_dict('records') if data[kw]["rising"] is not None else []
+                        }
+            elif query_type == 'interest_by_region':
+                resolution = query.get('resolution', ['COUNTRY'])[0]
+                data = pytrends.interest_by_region(resolution=resolution)
+                result = data.reset_index().to_dict('records') if not data.empty else []
+            else:
+                result = {"message": "Unsupported query type"}
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keywords": keywords,
+                "timeframe": timeframe,
+                "query_type": query_type,
+                "geo": geo,
+                "data": result
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing trends request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e),
+                "sample": True,
+                "data": [{"date": "2025-03-21", "value": 100}]
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_interest_over_time(self, query):
+        """Handle interest over time endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframe = query.get('timeframe', ['today 3-m'])[0]
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+
+            logger.info(f"Interest over time request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+
+            # Get data
+            data = pytrends.interest_over_time()
+            result = data.reset_index().to_dict('records') if not data.empty else []
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keywords": keywords,
+                "timeframe": timeframe,
+                "geo": geo,
+                "data": result
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing interest over time request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_multirange_interest_over_time(self, query):
+        """Handle multirange interest over time endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframes = query.get('timeframes', ['2022-01-01 2022-01-31'])[0].split('|')
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+
+            logger.info(f"Multirange interest over time request: keywords={keywords}, timeframes={timeframes}, geo={geo}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Collect data for each timeframe
+            all_data = []
+            for timeframe in timeframes:
+                try:
+                    # Build payload for this timeframe
+                    pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+
+                    # Get data
+                    data = pytrends.interest_over_time()
+                    if not data.empty:
+                        # Add a timeframe column to identify the source
+                        data['timeframe'] = timeframe
+                        all_data.append(data)
+                except Exception as inner_e:
+                    logger.warning(f"Error with timeframe {timeframe}: {str(inner_e)}")
+
+            # Combine all data frames
+            if all_data:
+                combined_data = pd.concat(all_data)
+                result = combined_data.reset_index().to_dict('records')
+            else:
+                result = []
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keywords": keywords,
+                "timeframes": timeframes,
+                "geo": geo,
+                "data": result
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing multirange interest over time request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_historical_hourly_interest(self, query):
+        """Handle historical hourly interest endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+
+            # Parse dates
+            try:
+                year_start = int(query.get('year_start', ['2022'])[0])
+                month_start = int(query.get('month_start', ['1'])[0])
+                day_start = int(query.get('day_start', ['1'])[0])
+                hour_start = int(query.get('hour_start', ['0'])[0])
+                year_end = int(query.get('year_end', ['2022'])[0])
+                month_end = int(query.get('month_end', ['1'])[0])
+                day_end = int(query.get('day_end', ['7'])[0])
+                hour_end = int(query.get('hour_end', ['0'])[0])
+                sleep = int(query.get('sleep', ['0'])[0])
+            except ValueError:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_response = {"error": "Date parameters must be integers"}
+                self.wfile.write(json.dumps(error_response).encode())
+                return
+
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+
+            logger.info(f"Historical hourly interest request: keywords={keywords}, start={year_start}-{month_start}-{day_start}, end={year_end}-{month_end}-{day_end}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Get data
+            data = pytrends.get_historical_interest(
+                keywords,
+                year_start=year_start,
+                month_start=month_start,
+                day_start=day_start,
+                hour_start=hour_start,
+                year_end=year_end,
+                month_end=month_end,
+                day_end=day_end,
+                hour_end=hour_end,
+                cat=cat,
+                geo=geo,
+                gprop='',
+                sleep=sleep
+            )
+            result = data.reset_index().to_dict('records') if not data.empty else []
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keywords": keywords,
+                "start_date": f"{year_start}-{month_start}-{day_start} {hour_start}:00",
+                "end_date": f"{year_end}-{month_end}-{day_end} {hour_end}:00",
+                "geo": geo,
+                "data": result
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing historical hourly interest request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_interest_by_region(self, query):
+        """Handle interest by region endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframe = query.get('timeframe', ['today 3-m'])[0]
+            geo = query.get('geo', [''])[0]
+            resolution = query.get('resolution', ['COUNTRY'])[0]
+            inc_low_vol = query.get('inc_low_vol', ['true'])[0].lower() == 'true'
+            inc_geo_code = query.get('inc_geo_code', ['false'])[0].lower() == 'true'
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+
+            logger.info(f"Interest by region request: keywords={keywords}, timeframe={timeframe}, geo={geo}, resolution={resolution}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+
+            # Get data
+            data = pytrends.interest_by_region(resolution=resolution, inc_low_vol=inc_low_vol, inc_geo_code=inc_geo_code)
+            result = data.reset_index().to_dict('records') if not data.empty else []
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keywords": keywords,
+                "timeframe": timeframe,
+                "geo": geo,
+                "resolution": resolution,
+                "data": result
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing interest by region request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_related_topics(self, query):
+        """Handle related topics endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframe = query.get('timeframe', ['today 3-m'])[0]
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+
+            logger.info(f"Related topics request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+
+            # Get data
+            data = pytrends.related_topics()
+            result = {}
+            for kw in keywords:
+                logger.info(f"Processing data for keyword '{kw}'")  # Debugging log
+                if kw in data:
+                    result[kw] = {}
+                    # Check for top topics
+                    if data[kw]['top'] is not None:
+                        result[kw]['top'] = data[kw]['top'].to_dict('records')
+                    else:
+                        result[kw]['top'] = []
+                    # Check for rising topics
+                    if data[kw]['rising'] is not None:
+                        result[kw]['rising'] = data[kw]['rising'].to_dict('records')
+                    else:
+                        result[kw]['rising'] = []
+                else:
+                    result[kw] = {"top": [], "rising": []}
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keywords": keywords,
+                "timeframe": timeframe,
+                "geo": geo,
+                "data": result
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing related topics request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_related_queries(self, query):
+        """Handle related queries endpoint"""
+        try:
+            # Get parameters
+            keywords = query.get('keywords', ['bitcoin'])[0].split(',')
+            timeframe = query.get('timeframe', ['today 3-m'])[0]
+            geo = query.get('geo', [''])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = int(query.get('cat', ['0'])[0])
+
+            logger.info(f"Related queries request: keywords={keywords}, timeframe={timeframe}, geo={geo}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Build payload
+            pytrends.build_payload(keywords, cat=cat, timeframe=timeframe, geo=geo)
+
+            # Get data
+            data = pytrends.related_queries()
+            result = {}
+            for kw in keywords:
+                if kw in data and data[kw]:
+                    result[kw] = {
+                        "top": data[kw]["top"].to_dict('records') if data[kw]["top"] is not None else [],
+                        "rising": data[kw]["rising"].to_dict('records') if data[kw]["rising"] is not None else []
+                    }
+                else:
+                    result[kw] = {"top": [], "rising": []}
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keywords": keywords,
+                "timeframe": timeframe,
+                "geo": geo,
+                "data": result
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing related queries request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_trending_searches(self, query):
+        """Handle trending searches endpoint"""
+        try:
+            # Get parameters
+            pn = query.get('pn', ['united_states'])[0].lower()  # Ensure lowercase
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+
+            logger.info(f"Trending searches request: pn={pn}")
+
+            # Use the get_trending_searches function from CLI
+            result = get_trending_searches(pn=pn, hl=hl, tz=tz)
+            
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(result, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing trending searches request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_realtime_trending_searches(self, query):
+        """Handle realtime trending searches endpoint"""
+        try:
+            # Get parameters
+            pn = query.get('pn', ['US'])[0]  # Can be uppercase or lowercase
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+            cat = query.get('cat', ['all'])[0]
+
+            logger.info(f"Realtime trending searches request: pn={pn}")
+
+            # Use the get_realtime_trending_searches function from CLI
+            result = get_realtime_trending_searches(pn=pn, hl=hl, tz=tz, cat=cat)
+
+            # Send successful response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(result, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing realtime trending searches request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def _send_validation_error(self, message, supported):
+        """Send a validation error response"""
+        self.send_response(400)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        error_response = {
+            "status": "error",
+            "message": message,
+            "supported_countries": supported
+        }
+        self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_top_charts(self, query):
+        """Handle top charts endpoint"""
+        try:
+            # Get parameters
+            date = int(query.get('date', ['2021'])[0])
+            geo = query.get('geo', ['GLOBAL'])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+
+            logger.info(f"Top charts request: date={date}, geo={geo}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+            import pandas as pd
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Get data
+            data = pytrends.top_charts(date, geo=geo)
+            result = data.to_dict('records') if not data.empty else []
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "date": date,
+                "geo": geo,
+                "data": result
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing top charts request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_suggestions(self, query):
+        """Handle keyword suggestions endpoint"""
+        try:
+            # Get parameters
+            keyword = query.get('keyword', ['bitcoin'])[0]
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+
+            logger.info(f"Suggestions request: keyword={keyword}")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Get data
+            suggestions = pytrends.suggestions(keyword=keyword)
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "keyword": keyword,
+                "suggestions": suggestions
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing suggestions request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+    def handle_categories(self, query):
+        """Handle categories endpoint"""
+        try:
+            # Get parameters
+            hl = query.get('hl', ['en-US'])[0]
+            tz = int(query.get('tz', ['360'])[0])
+
+            logger.info(f"Categories request")
+
+            # Import here to avoid impacting health checks
+            from pytrends.request import TrendReq
+
+            # Initialize PyTrends with custom headers
+            pytrends = TrendReq(
+                hl=hl,
+                tz=tz,
+                requests_args={
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
+            )
+
+            # Get data
+            categories = pytrends.categories()
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                "categories": categories
+            }
+            self.wfile.write(json.dumps(response, default=str).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing categories request: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Send error response
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {
+                "status": "error",
+                "message": str(e)
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+
+# =============== SERVER STARTUP ===============
+PORT = int(os.environ.get('PORT', 8080))
+logger.info(f"Starting server on 0.0.0.0:{PORT}")
+
+try:
+    httpd = socketserver.TCPServer(("0.0.0.0", PORT), Handler)
+    logger.info(f"Server started on 0.0.0.0:{PORT}")
+    httpd.serve_forever()
+except Exception as e:
+    logger.error(f"Error in server: {e}")
+    logger.error(traceback.format_exc())
