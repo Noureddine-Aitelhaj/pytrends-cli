@@ -202,11 +202,11 @@ def get_realtime_trending_searches(pn='US', hl='en-US', tz=360, cat="all"):
             raise ValueError("Empty realtime data")
             
     except Exception as e:
-    logger.warning(f"Realtime failed: {str(e)}, trying today's searches")
-    try:
-        df = pytrends.today_searches(pn=pn)
-        result = process_daily_data(df)
-        
+        logger.warning(f"Realtime failed: {str(e)}, trying today's searches")
+        try:
+            df = pytrends.today_searches(pn=pn)
+            result = process_daily_data(df)
+            
         except Exception as inner_e:
             logger.error(f"Daily trends also failed: {str(inner_e)}")
             result = [{"note": "Could not retrieve trending searches"}]
@@ -227,6 +227,7 @@ def process_realtime_data(df):
             "entities": item.get("entityNames", [])
         }
         for item in df.to_dict("records")
+    ]
 
 def process_daily_data(df):
     """Clean and format daily trends data"""
@@ -633,7 +634,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             # Get parameters
             keyword = query.get('keyword', [''])[0]
-            num = int(query.get('num', ['10'])[0])
+            num = int(query.get('num', ['10'])[0]
             language = query.get('language', ['en'])[0]
             region = query.get('region', ['us'])[0]
 
@@ -736,7 +737,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             # Get parameters
             search_query = query.get('q', [''])[0]
-            num_results = int(query.get('num', ['10'])[0])
+            num_results = int(query.get('num', ['10'])[0]
             include_trends = query.get('include_trends', ['false'])[0].lower() == 'true'
             lang = query.get('lang', ['en'])[0]
 
