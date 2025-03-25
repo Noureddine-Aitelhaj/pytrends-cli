@@ -195,22 +195,18 @@ def get_realtime_trending_searches(pn='US', hl='en-US', tz=360, cat="all"):
     result = []
     try:
         # Attempt realtime API first
-        df = pytrends.realtime_trending_searches(pn=pn)
+        df = pytrends.realtime_trending_searches(pn=pn, cat=cat)
         result = process_realtime_data(df)
         
         if not result:  # Fallback if empty response
             raise ValueError("Empty realtime data")
             
     except Exception as e:
-        logger.warning(f"Realtime failed: {str(e)}, trying daily trends")
-        # Fallback to daily trends
-        try:
-            df = dailydata.get_daily_trends(
-                geo=pn,
-                date=datetime.now().strftime('%Y%m%d'),
-                hl=hl
-            )
-            result = process_daily_data(df)
+    logger.warning(f"Realtime failed: {str(e)}, trying today's searches")
+    try:
+        df = pytrends.today_searches(pn=pn)
+        result = process_daily_data(df)
+        
         except Exception as inner_e:
             logger.error(f"Daily trends also failed: {str(inner_e)}")
             result = [{"note": "Could not retrieve trending searches"}]
@@ -225,30 +221,18 @@ def process_realtime_data(df):
     """Clean and format realtime data"""
     if df is None or df.empty:
         return []
-        
-    clean_result = []
-    for item in df.to_dict('records'):
-        clean_item = {
-            "title": item.get('title', ''),
-            "traffic": item.get('formattedTraffic', ''),
-            "image": item.get('image', {}).get('newsUrl', ''),
-            "articles": [
-                {"title": art.get('title', ''), "url": art.get('url', '')}
-                for art in item.get('articles', [])
-            ]
+    return [
+        {
+            "title": item.get("title", ""),
+            "entities": item.get("entityNames", [])
         }
-        clean_result.append(clean_item)
-    return clean_result
+        for item in df.to_dict("records")
 
 def process_daily_data(df):
     """Clean and format daily trends data"""
     if df is None or df.empty:
         return []
-    try:
-        return df[['title', 'traffic', 'related_queries']].to_dict('records')
-    except:
-        # Fallback if columns are different
-        return df.to_dict('records')
+    return [{"title": title} for title in df]
 
 def google_search(query, num_results=10, lang="en", proxy=None, advanced=False, sleep_interval=0, timeout=5):
     """
