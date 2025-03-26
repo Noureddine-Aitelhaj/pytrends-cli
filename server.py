@@ -1653,6 +1653,35 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             # Import dependencies
             from facebook_page_scraper import Facebook_scraper
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+            from webdriver_manager.chrome import ChromeDriverManager
+
+            # Configure Chrome options
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+        
+            # Initialize Chrome driver
+            driver = webdriver.Chrome(
+                ChromeDriverManager().install(),
+                options=chrome_options
+            )
+
+        # Initialize scraper with the driver
+        scraper = Facebook_scraper(
+            page_or_group_name=page_name,
+            posts_count=posts_count,
+            browser="chrome",
+            driver=driver,  # Pass the configured driver
+            proxy=proxy,
+            timeout=timeout,
+            headless=headless,
+            isGroup=is_group,
+            username=username,
+            password=password
+        )
 
             # Initialize scraper
             scraper = Facebook_scraper(
