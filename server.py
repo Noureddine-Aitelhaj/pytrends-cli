@@ -1626,48 +1626,48 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             }
             self.wfile.write(json.dumps(error_response).encode())
     def handle_facebook_scrape(self, query):
-        """Handle Facebook page scraping requests"""
-        try:
-            # Get parameters
-            page_name = query.get('page_name', [''])[0]
-            posts_count = int(query.get('posts_count', ['10'])[0])
-            browser = query.get('browser', ['chrome'])[0]
-            proxy = query.get('proxy', [None])[0]
-            timeout = int(query.get('timeout', ['600'])[0])
-            headless = query.get('headless', ['true'])[0].lower() == 'true'
-            is_group = query.get('is_group', ['false'])[0].lower() == 'true'
-            
-            # Get credentials from environment variables
-            username = os.getenv('FB_USERNAME')
-            password = os.getenv('FB_PASSWORD')
-
-            if not page_name:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {"error": "page_name parameter is required"}
-                self.wfile.write(json.dumps(error_response).encode())
-                return
-
-            logger.info(f"Facebook scrape request: page={page_name}, posts={posts_count}")
-
-            # Import dependencies
-            from facebook_page_scraper import Facebook_scraper
-            from selenium import webdriver
-            from selenium.webdriver.chrome.options import Options
-            from webdriver_manager.chrome import ChromeDriverManager
-
-            # Configure Chrome options
-            chrome_options = Options()
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
+    """Handle Facebook page scraping requests"""
+    try:
+        # Get parameters
+        page_name = query.get('page_name', [''])[0]
+        posts_count = int(query.get('posts_count', ['10'])[0])
+        browser = query.get('browser', ['chrome'])[0]
+        proxy = query.get('proxy', [None])[0]
+        timeout = int(query.get('timeout', ['600'])[0])
+        headless = query.get('headless', ['true'])[0].lower() == 'true'
+        is_group = query.get('is_group', ['false'])[0].lower() == 'true'
         
-            # Initialize Chrome driver
-            driver = webdriver.Chrome(
-                ChromeDriverManager().install(),
-                options=chrome_options
-            )
+        # Get credentials from environment variables
+        username = os.getenv('FB_USERNAME')
+        password = os.getenv('FB_PASSWORD')
+
+        if not page_name:
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            error_response = {"error": "page_name parameter is required"}
+            self.wfile.write(json.dumps(error_response).encode())
+            return
+
+        logger.info(f"Facebook scrape request: page={page_name}, posts={posts_count}")
+
+        # Import dependencies
+        from facebook_page_scraper import Facebook_scraper
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from webdriver_manager.chrome import ChromeDriverManager
+
+        # Configure Chrome options
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+    
+        # Initialize Chrome driver
+        driver = webdriver.Chrome(
+            ChromeDriverManager().install(),
+            options=chrome_options
+        )
 
         # Initialize scraper with the driver
         scraper = Facebook_scraper(
@@ -1683,40 +1683,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             password=password
         )
 
-            # Initialize scraper
-            scraper = Facebook_scraper(
-                page_or_group_name=page_name,
-                posts_count=posts_count,
-                browser=browser,
-                proxy=proxy,
-                timeout=timeout,
-                headless=headless,
-                isGroup=is_group,
-                username=username,
-                password=password
-            )
+        # Get data
+        json_data = scraper.scrap_to_json()
 
-            # Get data
-            json_data = scraper.scrap_to_json()
+        # Send response
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(json_data).encode())
 
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(json_data).encode())
-
-        except Exception as e:
-            logger.error(f"Error processing Facebook scrape request: {str(e)}")
-            logger.error(traceback.format_exc())
-            
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            error_response = {
-                "status": "error",
-                "message": str(e)
-            }
-            self.wfile.write(json.dumps(error_response).encode())   
+    except Exception as e:
+        logger.error(f"Error processing Facebook scrape request: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        self.send_response(500)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        error_response = {
+            "status": "error",
+            "message": str(e)
+        }
+        self.wfile.write(json.dumps(error_response).encode())  
 
 # =============== SERVER STARTUP ===============
 PORT = int(os.environ.get('PORT', 8080))
