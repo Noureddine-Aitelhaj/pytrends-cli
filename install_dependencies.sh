@@ -1,23 +1,14 @@
 #!/bin/bash
-# install_dependencies.sh
-
 set -e
 
-echo "Installing NumPy first to ensure compatibility..."
-pip install numpy
+echo "Checking Chrome installation..."
+if ! command -v google-chrome &> /dev/null; then
+    echo "Chrome not found! Make sure it's installed in Dockerfile"
+    exit 1
+fi
 
-echo "Installing other dependencies..."
-pip install pandas
-pip install urllib3==1.25.11
-pip install pytrends
-pip install requests
-pip install googlesearch-python
-pip install facebook-page-scraper
-pip install selenium
-pip install webdriver-manager
-pip install python-dateutil
-pip install selenium-wire
-pip install blinker==1.4  # Add this line
+echo "Installing Python dependencies..."
+pip install -r requirements.txt
 
 echo "Installation completed successfully"
 pip list
