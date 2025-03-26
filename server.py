@@ -638,7 +638,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.handle_not_implemented()
             return
        # Facebook scraping endpoint
-       elif path == '/facebook':
+        elif path == '/facebook':
             self.handle_facebook_scrape(query)
             return
         # Default response for unimplemented endpoints
