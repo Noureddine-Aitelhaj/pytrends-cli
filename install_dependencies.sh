@@ -17,6 +17,7 @@ pip install selenium
 pip install webdriver-manager
 pip install python-dateutil
 pip install selenium-wire
+pip install blinker==1.4  # Add this line
 
 echo "Installation completed successfully"
 pip list
