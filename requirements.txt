@@ -1,13 +1,12 @@
-# requirements.txt - Update with compatible versions
 numpy
 pandas
-urllib3
+urllib3==1.25.11
 pytrends
 requests
 googlesearch-python
 facebook-page-scraper
-selenium
-webdriver-manager
+selenium>=4.0.0
+webdriver-manager>=3.8.0
 python-dateutil
 selenium-wire
-blinker==1.4  # Add this line
+blinker==1.4
