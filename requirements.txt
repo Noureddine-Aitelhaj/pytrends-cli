@@ -5,3 +5,8 @@ urllib3
 pytrends
 requests
 googlesearch-python
+facebook-page-scraper
+selenium
+webdriver-manager
+python-dateutil
+selenium-wire
