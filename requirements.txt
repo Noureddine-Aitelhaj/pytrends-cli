@@ -6,7 +6,7 @@ requests
 googlesearch-python
 facebook-page-scraper==5.0.6
 selenium>=4.0.0
-webdriver-manager>=3.8.0
+webdriver-manager==3.2.2
 python-dateutil
 selenium-wire
 blinker==1.4
