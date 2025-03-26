@@ -4,7 +4,7 @@ urllib3==1.25.11
 pytrends
 requests
 googlesearch-python
-facebook-page-scraper
+facebook-page-scraper==5.0.6
 selenium>=4.0.0
 webdriver-manager>=3.8.0
 python-dateutil
