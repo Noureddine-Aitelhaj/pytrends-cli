@@ -1,13 +1,7 @@
+# requirements.txt - Update with compatible versions
 numpy
 pandas
-urllib3==1.26.6
+urllib3
 pytrends
 requests
 googlesearch-python
-# Commenting out dependencies that might cause issues in this environment
-# facebook-page-scraper==5.0.6
-# selenium>=4.0.0
-# webdriver-manager==3.2.2
-python-dateutil
-# selenium-wire
-blinker==1.4
